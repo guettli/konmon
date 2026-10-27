@@ -56,7 +56,7 @@ ignore:
 		{widget("other", "Stalled", "Waiting for upstream"), now, -1},
 		{widget("team-a", "Ready", "Waiting for upstream"), now, -1},
 		{&checks.Finding{Check: "container-image-tag", Name: "d"}, now, 1},
-		{widget("", "Stalled", "Waiting for x"), now, -1}, // cluster-scoped: namespace: team-* does not match
+		{widget("", "Stalled", "Waiting for x"), now, -1},                                        // cluster-scoped: namespace: team-* does not match
 		{&checks.Finding{Check: checks.ErrorCheck, Message: "check conditions failed"}, now, -1}, // a broad rule never hides a failing check
 		{&checks.Finding{Check: checks.ErrorCheck, Key: "x"}, now, 2},
 	}

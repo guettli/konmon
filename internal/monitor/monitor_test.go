@@ -373,7 +373,7 @@ func TestIgnoreRuleStartsAndStopsMatching(t *testing.T) {
 	ctx := context.Background()
 	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
 	ignoreUntil := time.Time{}
-	m.cfg.Ignore = func(f *checks.Finding, now time.Time) string {
+	m.cfg.Ignore = func(_ *checks.Finding, now time.Time) string {
 		if now.Before(ignoreUntil) {
 			return "rule"
 		}

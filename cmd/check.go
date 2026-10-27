@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/signal"
 	"path"
-	"regexp"
 	"slices"
 	"syscall"
 	"time"
@@ -231,15 +230,6 @@ type checkResult struct {
 func matchGlob(s string, patterns []string) bool {
 	for _, p := range patterns {
 		if ok, err := path.Match(p, s); err == nil && ok {
-			return true
-		}
-	}
-	return false
-}
-
-func matchAny(res []*regexp.Regexp, s string) bool {
-	for _, re := range res {
-		if re.MatchString(s) {
 			return true
 		}
 	}
