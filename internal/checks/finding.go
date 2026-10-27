@@ -50,7 +50,11 @@ func (f *Finding) ID() string {
 // "  namespace resource name message (age) [check]".
 func (f *Finding) Line(now time.Time) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "  %s %s %s %s", f.Namespace, f.GVR.Resource, f.Name, f.Message)
+	if f.UID == "" {
+		b.WriteString("  " + f.Message) // not about one object, e.g. check-error
+	} else {
+		fmt.Fprintf(&b, "  %s %s %s %s", f.Namespace, f.GVR.Resource, f.Name, f.Message)
+	}
 	if !f.Since.IsZero() {
 		fmt.Fprintf(&b, " (%s)", now.Sub(f.Since).Round(time.Second))
 	}

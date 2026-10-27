@@ -28,15 +28,27 @@ var checkOpts struct {
 	historyWindow time.Duration
 }
 
-// errFindings makes `konmon check` exit with 1 without printing an error.
-var errFindings = errors.New("findings")
+// exitError ends konmon with a code, without printing an error.
+type exitError int
+
+func (e exitError) Error() string { return fmt.Sprintf("exit %d", int(e)) }
+
+const (
+	// errFindings: there are health findings.
+	errFindings = exitError(1)
+	// errIncomplete: no findings, but not everything could be checked.
+	errIncomplete = exitError(2)
+)
 
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Run all checks once and print the findings",
 	Long: `List all objects of the cluster once, run the checks and print the
-findings, like check-conditions does. Nothing is stored. The exit code is 1
-if there are health findings.
+findings, like check-conditions does. Nothing is stored.
+
+Exit codes: 0 no findings; 1 health findings; 2 no findings, but some
+resource types or API groups could not be listed (other than forbidden ones,
+which are printed). Other errors also exit with 1.
 
 Checks which use condition history need --use-db: the history is read from
 the database of a running 'konmon run' (--db).`,
@@ -44,7 +56,8 @@ the database of a running 'konmon run' (--db).`,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		err := check(cmd.Context(), cmd)
-		if err != nil && !errors.Is(err, errFindings) {
+		var exit exitError
+		if err != nil && !errors.As(err, &exit) {
 			cmd.PrintErrln("Error:", err)
 		}
 		return err
@@ -154,7 +167,7 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 	}
 	if len(listed.Failed) > 0 {
 		// Do not report "healthy" for a cluster which was only partly checked.
-		return fmt.Errorf("%d resource types or API groups could not be listed", len(listed.Failed))
+		return errIncomplete
 	}
 	return nil
 }

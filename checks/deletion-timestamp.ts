@@ -2,7 +2,7 @@
 // finalizer whose controller is gone or failing.
 //
 // Ported from check-conditions (github.com/guettli/check-conditions).
-import { defineCheck } from "konmon";
+import { defineCheck, parseTime } from "konmon";
 
 export default defineCheck({
   name: "deletion-timestamp",
@@ -33,10 +33,8 @@ export default defineCheck({
   check(obj, ctx) {
     const olderThan = ctx.params.olderThanSeconds;
     if (olderThan <= 0) return [];
-    const ts = obj.metadata.deletionTimestamp;
-    if (!ts || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(ts)) return [];
-    const since = new Date(ts);
-    if (isNaN(since.getTime())) return [];
+    const since = parseTime(obj.metadata.deletionTimestamp);
+    if (!since) return [];
     if (ctx.now.getTime() - since.getTime() <= olderThan * 1000) return [];
     const finalizers = obj.metadata.finalizers ?? [];
     return [

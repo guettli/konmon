@@ -156,7 +156,7 @@ cases:
           - {type: Foo, status: "False", reason: B}
     expect:
       - {key: Foo, condition: Foo}
-      - {key: 'Foo False B ""', condition: Foo}
+      - {key: Foo False B, condition: Foo}
 
   - name: a timestamp without zone is not RFC3339
     resource: pods
@@ -168,3 +168,13 @@ cases:
           - {type: ContainersReady, status: "False", lastTransitionTime: "2026-01-01T00:00:00"}
     expect:
       - {condition: ContainersReady, since: ""}
+
+  - name: Suspended=False is healthy
+    resource: sandboxes.agents.x-k8s.io
+    object:
+      metadata: {name: s, namespace: x}
+      status:
+        conditions:
+          - {type: Suspended, status: "False", reason: NotSuspended, message: Sandbox is not suspended}
+          - {type: Ready, status: "True"}
+    expect: []

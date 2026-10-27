@@ -304,3 +304,29 @@ func TestEvaluateKeepsFindingsOfFailedChecksAndSkipsHygiene(t *testing.T) {
 		t.Errorf("only the conditions finding is resolved: %+v", n.resolved)
 	}
 }
+
+func TestAbortedEvaluationResendsFiringAlerts(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	if err := m.Evaluate(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Evaluate(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 {
+		t.Fatalf("want 1 firing, got %d", len(n.firing))
+	}
+	n.firing = nil
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := m.Evaluate(cancelled, t0.Add(2*time.Minute)); err == nil {
+		t.Fatal("want an error for an aborted evaluation")
+	}
+	if len(n.firing) != 1 {
+		t.Errorf("firing alerts must be re-sent after an aborted evaluation, got %d", len(n.firing))
+	}
+}

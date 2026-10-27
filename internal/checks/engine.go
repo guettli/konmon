@@ -152,7 +152,9 @@ func (e *Engine) UsesHistory() bool {
 type Failure struct {
 	Check string
 	UID   string
-	Err   error
+	// Object is namespace/name, for messages.
+	Object string
+	Err    error
 }
 
 // Result of one evaluation.
@@ -240,23 +242,11 @@ feed:
 	}
 
 	res := &Result{Objects: len(tasks), Duration: time.Since(start)}
-	// A check which fails the same way for many objects (e.g. a type in
-	// reads is forbidden) gets one check-error finding, on the first
-	// object, not one alert per object.
-	errorSeen := map[string]bool{}
 	for i := range results {
-		for _, f := range results[i].findings {
-			if f.Check == ErrorCheck {
-				k := f.Key + "\x00" + f.Message
-				if errorSeen[k] {
-					continue
-				}
-				errorSeen[k] = true
-			}
-			res.Findings = append(res.Findings, f)
-		}
+		res.Findings = append(res.Findings, results[i].findings...)
 		res.Failures = append(res.Failures, results[i].failures...)
 		res.Calls += results[i].calls
 	}
+	res.Findings = append(res.Findings, errorFindings(e.defs, res.Failures)...)
 	return res, nil
 }

@@ -365,8 +365,9 @@ export default defineCheck({
 	if len(res.Failures) != 3 {
 		t.Errorf("want 3 failures (findings of all objects stay open), got %d", len(res.Failures))
 	}
-	if len(res.Findings) != 1 || res.Findings[0].Name != "a" {
-		t.Errorf("want one check-error finding on the first object, got %+v", res.Findings)
+	if len(res.Findings) != 1 || res.Findings[0].UID != "" ||
+		!strings.Contains(res.Findings[0].Message, "failed for 3 objects, e.g. default/a") {
+		t.Errorf("want one check-error finding independent of the objects, got %+v", res.Findings)
 	}
 }
 
@@ -383,5 +384,31 @@ func TestCoreTestsOfReplacedChecksAreSkipped(t *testing.T) {
 		if got := e.Tested(tf, true); got != want {
 			t.Errorf("Tested(%s) = %v, want %v", tf.Check, got, want)
 		}
+	}
+}
+
+func TestCheckReplacingGlobalsCannotCrash(t *testing.T) {
+	e, err := Load(nil, []Source{
+		{Path: "evil.js", Code: `
+Object.freeze = () => { throw new Error("no freeze"); };
+globalThis.Date = 1;
+Object.defineProperty(Object.prototype, "now", { set() { throw new Error("setter"); } });
+export default { name: "evil", match: { resources: ["pods"] }, check() { return [{ message: "still here" }]; } };`},
+		{Path: "good.js", Code: `export default { name: "good", match: { resources: ["pods"] }, check(o, ctx) { return [{ message: String(ctx.now.getTime()) }]; } };`},
+	}, Options{Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := evaluate(t, e, []Item{pod("a"), pod("b")})
+	if len(res.Failures) != 0 {
+		t.Fatalf("failures: %+v", res.Failures)
+	}
+	for _, f := range res.Findings {
+		if f.Check == "good" && f.Message != "1767225600000" {
+			t.Errorf("good check: %q", f.Message)
+		}
+	}
+	if len(res.Findings) != 4 {
+		t.Errorf("want 4 findings, got %+v", res.Findings)
 	}
 }

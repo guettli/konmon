@@ -31,7 +31,7 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 	f := checks.Finding{
 		Check: "conditions", Category: checks.CategoryHealth, Severity: "warning",
 		GVR:       schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
-		Namespace: "ns", Name: "web", Key: "Available", Condition: "Available",
+		Namespace: "ns", Name: "web", UID: "u1", Key: "Available", Condition: "Available",
 		Message: `Condition Available=False MinimumReplicasUnavailable ""`,
 		Details: map[string]string{"reason": "MinimumReplicasUnavailable"},
 	}

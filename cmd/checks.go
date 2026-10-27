@@ -190,8 +190,10 @@ func storeType(e *checks.Engine) func(schema.GroupResource) bool {
 // is the core group, which has no deployments; use "deployments.apps").
 func warnUnserved(e *checks.Engine, disc discovery.DiscoveryInterface, log *slog.Logger) {
 	lists, err := discovery.ServerPreferredResources(disc)
-	if err != nil && len(lists) == 0 {
-		return // the watcher reports discovery errors
+	if err != nil {
+		// Partial discovery would make served types look missing; the
+		// watcher reports discovery errors.
+		return
 	}
 	served := map[schema.GroupResource]struct{}{}
 	for _, l := range lists {

@@ -21,7 +21,15 @@ const globalName = "__konmonCheck"
 
 // runtimeModule is the JavaScript side of `import ... from "konmon"`. The
 // types are in konmon.d.ts.
-const runtimeModule = `export function defineCheck(check) { return check; }`
+const runtimeModule = `
+export function defineCheck(check) { return check; }
+const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+export function parseTime(s) {
+  if (typeof s !== "string" || !rfc3339.test(s)) return undefined;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+`
 
 // compile bundles a check file with esbuild (TypeScript is stripped, the
 // "konmon" import is resolved) and compiles the result for goja.

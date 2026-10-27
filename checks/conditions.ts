@@ -6,7 +6,7 @@
 // (MemoryPressure, Degraded), and some are fine either way. The tables below
 // collect that knowledge. If a condition is reported wrongly, add it here
 // or override this check with your own file of the same name.
-import { defineCheck, Condition, KubeObject } from "konmon";
+import { defineCheck, parseTime, Condition, KubeObject } from "konmon";
 
 // Condition types which can be True or False, and both values are fine.
 const typesToSkip = [
@@ -101,6 +101,7 @@ const positivePrefixes = ["Created"];
 // False is healthy for any resource. Matched exactly.
 const negativeAnyResource = [
   "Error", // an Error condition is only interesting when not False
+  "Suspended", // e.g. agents.x-k8s.io sandboxes; added after the port from check-conditions
 ];
 
 const capiRollout = ["RollingOut", "ScalingDown", "ScalingUp", "Remediating"];
@@ -221,16 +222,6 @@ interface Row {
   since?: Date;
 }
 
-// RFC3339 only, like Go's time.Parse: JavaScript's Date also accepts
-// timestamps without a zone (read as local time).
-const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-
-function parseTime(s: string | undefined): Date | undefined {
-  if (!s || !rfc3339.test(s)) return undefined;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? undefined : d;
-}
-
 function hasRestarts(pod: KubeObject): boolean {
   for (const key of ["containerStatuses", "initContainerStatuses"]) {
     for (const s of pod.status?.[key] ?? []) {
@@ -335,8 +326,10 @@ export default defineCheck({
     return [...groups.values()].map(({ row, types }) => {
       types.sort();
       const condition = types.join("/");
+      // The message is left out: it may change while the problem stays.
       let key = condition;
-      if (used.has(key)) key = `${condition} ${row.status} ${row.reason} ${JSON.stringify(row.message)}`;
+      if (used.has(key)) key = `${condition} ${row.status} ${row.reason}`;
+      for (let i = 2; used.has(key); i++) key = `${condition} ${row.status} ${row.reason} ${i}`;
       used.add(key);
       let message = `Condition ${condition}=${row.status} ${row.reason} ${JSON.stringify(row.message)}`;
       if (resource === "deployments" && row.reason === "MinimumReplicasUnavailable") {

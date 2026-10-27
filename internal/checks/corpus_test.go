@@ -61,6 +61,9 @@ func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 			continue
 		}
 		for _, f := range args.Check(it.Obj, it.GVR, now) {
+			if intendedDifference(&f) {
+				continue
+			}
 			want[goKey(&f)] = true
 		}
 	}
@@ -103,6 +106,13 @@ func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 		t.Errorf("only konmon reports: %s", k)
 	}
 	t.Logf("%d objects, %d findings, %d differences", len(items), len(want), len(missing)+len(extra))
+}
+
+// intendedDifference reports findings of check-conditions which the
+// konmon checks deliberately do not report (rules added after the port).
+func intendedDifference(f *checkconditions.Finding) bool {
+	return f.Kind == checkconditions.FindingCondition && f.Status == "False" &&
+		len(f.ConditionTypes) == 1 && f.ConditionTypes[0] == "Suspended"
 }
 
 func goKey(f *checkconditions.Finding) string {

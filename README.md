@@ -45,7 +45,8 @@ konmon run --db konmon.db
 # Send alerts, with a cluster label.
 konmon run --db konmon.db --cluster-name prod --alertmanager-url http://alertmanager:9093
 
-# Ad hoc, like check-conditions: list everything once, print findings, exit 1 if any.
+# Ad hoc, like check-conditions: list everything once and print findings.
+# Exit code 1: findings; 2: some types could not be listed.
 konmon check --context prod
 
 # What is wrong now? What was wrong two hours ago?
@@ -116,9 +117,10 @@ export default defineCheck({
 - `ctx.get(resource, namespace, name)` and `ctx.list(resource, {namespace, labels, owner})` read konmon's cache, never the API server. A check may read the types in its `match` and `reads`. Reading a type which is not available throws, so a missing CRD never looks like "no objects"; use `ctx.has(resource)` for optional types.
 - `ctx.history.conditions(obj, since)` returns the recorded condition changes (needs `uses: ["history"]`), e.g. to report a condition which flaps.
 - Resource names are `resource.group` (`deployments.apps`); a name without a dot is the core group (`pods`).
-- Objects are read-only views of konmon's cache (writes throw). Each property access returns a new view, so compare objects by `metadata.uid`, not with `===`. `ctx` is frozen and fresh for every call.
+- Objects are read-only views of konmon's cache (writes throw). Each property access returns a new view, so compare objects by `metadata.uid`, not with `===`. `ctx` is frozen and fresh for every call, but this is not isolation: module variables and globals are shared between calls, so don't keep state in them.
+- `parseTime(s)` from `konmon` parses RFC3339 timestamps strictly; `new Date(s)` also accepts timestamps without a zone and reads them as local time.
 - `Date` and `Math.random` are deterministic within an evaluation (`ctx.now`). There is no network or filesystem access, and the only import is `konmon`. A call which runs longer than `--check-timeout` fails.
-- A check which throws for an object opens a `check-error` finding; its previous findings for that object stay open, so `--for` does not start again.
+- A check which throws keeps its previous findings for that object open, so `--for` does not start again, and opens one `check-error` finding per check ("failed for N objects, e.g. …").
 
 Use your checks with `--checks DIR` (repeatable). `--disable-check NAME` (globs) turns checks off, `--check-param check.param=value` changes parameters, and `konmon checks list` shows what is enabled.
 

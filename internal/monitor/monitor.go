@@ -319,13 +319,24 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		}
 		hist = StoreHistory(rows)
 	}
-	// A slow check must not stall the event loop: Evaluate runs in it. An
-	// aborted evaluation changes no findings.
-	evalCtx, cancel := context.WithTimeout(ctx, m.cfg.EvalInterval)
+	// A slow check must not stall the event loop for long: Evaluate runs in
+	// it. An aborted evaluation changes no findings, but the firing alerts
+	// are sent again, or Alertmanager would resolve them.
+	evalCtx, cancel := context.WithTimeout(ctx, 3*m.cfg.EvalInterval)
 	res, err := m.cfg.Checks.Evaluate(evalCtx, checks.NewSnapshot(items, m.source.Available()), hist, now)
 	cancel()
 	if err != nil {
+		nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		nerr := m.notifyOpen(nctx, now)
+		ncancel()
+		if nerr != nil {
+			m.cfg.Log.Error("notify after aborted evaluation", "err", nerr)
+		}
 		return err
+	}
+	if res.Duration > m.cfg.EvalInterval {
+		m.cfg.Log.Warn("evaluation is slower than --eval-interval", "duration", res.Duration.Round(time.Millisecond),
+			"objects", res.Objects, "calls", res.Calls)
 	}
 	failed := make(map[[2]string]struct{}, len(res.Failures))
 	for _, f := range res.Failures {
@@ -392,6 +403,24 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("notify: %w", err)
 	}
 	return nil
+}
+
+// notifyOpen sends the findings which are firing according to the store.
+func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
+	if m.notifier == nil {
+		return nil
+	}
+	open, err := m.store.FindingsAt(ctx, now)
+	if err != nil {
+		return err
+	}
+	var firing []store.FindingRow
+	for _, r := range open {
+		if r.ResolvedAt.IsZero() && now.Sub(r.FirstSeen) >= m.cfg.For && r.Finding.Category == checks.CategoryHealth {
+			firing = append(firing, r)
+		}
+	}
+	return m.notifier.Notify(ctx, now, firing, nil)
 }
 
 func (m *Monitor) ignored(f *checks.Finding) bool {

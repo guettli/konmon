@@ -42,6 +42,11 @@ type jsRuntime struct {
 	snap    *Snapshot
 	hist    History
 	current *loadedCheck
+	// Saved before any check code runs: a check may replace the globals.
+	freezeFn goja.Callable
+	dateCtor *goja.Object
+	// broken is set if preparing an evaluation failed; all calls fail.
+	broken error
 }
 
 type loadedCheck struct {
@@ -70,6 +75,8 @@ func newRuntime(defs []*Definition, opts Options) (*jsRuntime, error) {
 	if err := rt.vm.Set("console", console); err != nil {
 		return nil, err
 	}
+	rt.freezeFn, _ = goja.AssertFunction(rt.vm.Get("Object").ToObject(rt.vm).Get("freeze"))
+	rt.dateCtor = rt.vm.Get("Date").ToObject(rt.vm)
 	for _, d := range defs {
 		obj, err := runProgram(rt.vm, d.program)
 		if err != nil {
@@ -107,30 +114,46 @@ func (rt *jsRuntime) log(call goja.FunctionCall) goja.Value {
 	return goja.Undefined()
 }
 
-// begin prepares the runtime for one evaluation: one ctx object per check.
+// begin prepares the runtime for one evaluation: one ctx base per check.
 func (rt *jsRuntime) begin(snap *Snapshot, hist History, now time.Time) {
 	rt.snap, rt.hist, rt.now = snap, hist, now
+	rt.broken = nil
+	defer func() {
+		if r := recover(); r != nil {
+			rt.broken = fmt.Errorf("prepare evaluation: %v", r)
+		}
+	}()
 	for _, lc := range rt.checks {
 		lc.base = rt.newContextBase(lc)
 	}
 }
 
 func (rt *jsRuntime) freeze(o *goja.Object) {
-	freeze, _ := goja.AssertFunction(rt.vm.Get("Object").ToObject(rt.vm).Get("freeze"))
-	if _, err := freeze(goja.Undefined(), o); err != nil {
+	if _, err := rt.freezeFn(goja.Undefined(), o); err != nil {
 		panic(err)
 	}
 }
 
-// callContext is the ctx argument of one call.
-func (rt *jsRuntime) callContext(lc *loadedCheck, resource *goja.Object) *goja.Object {
-	vm := rt.vm
-	ctx := vm.NewObject()
-	must(ctx.SetPrototype(lc.base))
-	nowVal, err := vm.New(vm.Get("Date"), vm.ToValue(rt.now.UnixMilli()))
+// set sets a property without calling setters a check may have put on
+// Object.prototype.
+func (rt *jsRuntime) set(o *goja.Object, name string, v any) {
+	must(o.DefineDataProperty(name, rt.vm.ToValue(v), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE))
+}
+
+func (rt *jsRuntime) newDate(t time.Time) goja.Value {
+	d, err := rt.vm.New(rt.dateCtor, rt.vm.ToValue(t.UnixMilli()))
 	must(err)
-	must(ctx.Set("now", nowVal))
-	must(ctx.Set("resource", resource))
+	return d
+}
+
+// callContext is the ctx argument of one call. It is fresh and frozen, so a
+// check cannot change ctx.now or ctx itself for the next object. This is
+// not isolation: module variables and globals are shared between calls.
+func (rt *jsRuntime) callContext(lc *loadedCheck, resource *goja.Object) *goja.Object {
+	ctx := rt.vm.NewObject()
+	must(ctx.SetPrototype(lc.base))
+	rt.set(ctx, "now", rt.newDate(rt.now))
+	rt.set(ctx, "resource", resource)
 	rt.freeze(ctx)
 	return ctx
 }
@@ -138,12 +161,12 @@ func (rt *jsRuntime) callContext(lc *loadedCheck, resource *goja.Object) *goja.O
 func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	vm := rt.vm
 	ctx := vm.NewObject()
-	must(ctx.Set("params", wrap(vm, lc.def.Params)))
-	must(ctx.Set("has", func(resource string) bool {
+	rt.set(ctx, "params", wrap(vm, lc.def.Params))
+	rt.set(ctx, "has", func(resource string) bool {
 		gr := rt.resource(lc, resource)
 		return rt.snap.Available(gr)
-	}))
-	must(ctx.Set("get", func(resource string, namespace goja.Value, name string) goja.Value {
+	})
+	rt.set(ctx, "get", func(resource string, namespace goja.Value, name string) goja.Value {
 		gr := rt.readable(lc, resource)
 		ns := ""
 		if namespace != nil && !goja.IsUndefined(namespace) && !goja.IsNull(namespace) {
@@ -154,8 +177,8 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			return goja.Null()
 		}
 		return wrap(vm, obj.Object)
-	}))
-	must(ctx.Set("list", func(resource string, opts goja.Value) goja.Value {
+	})
+	rt.set(ctx, "list", func(resource string, opts goja.Value) goja.Value {
 		gr := rt.readable(lc, resource)
 		objs := rt.snap.list(gr, rt.listOptions(opts))
 		vals := make([]any, 0, len(objs))
@@ -163,9 +186,9 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			vals = append(vals, wrap(vm, o.Object))
 		}
 		return vm.NewArray(vals...)
-	}))
+	})
 	history := vm.NewObject()
-	must(history.Set("conditions", func(obj goja.Value, since goja.Value) goja.Value {
+	rt.set(history, "conditions", func(obj goja.Value, since goja.Value) goja.Value {
 		if !lc.def.uses("history") {
 			panic(vm.NewTypeError(fmt.Sprintf("check %s uses ctx.history but does not declare uses: [\"history\"]", lc.def.Name)))
 		}
@@ -198,10 +221,10 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			vals = append(vals, o)
 		}
 		return vm.NewArray(vals...)
-	}))
+	})
 	rt.freeze(history)
-	must(ctx.Set("history", history))
-	must(ctx.Set("log", rt.log))
+	rt.set(ctx, "history", history)
+	rt.set(ctx, "log", rt.log)
 	rt.freeze(ctx)
 	return ctx
 }
@@ -280,18 +303,19 @@ func (rt *jsRuntime) run(t task) taskResult {
 	vm := rt.vm
 	obj := wrap(vm, t.item.Obj.Object)
 	resource := vm.NewObject()
-	must(resource.Set("group", t.item.GVR.Group))
-	must(resource.Set("version", t.item.GVR.Version))
-	must(resource.Set("resource", t.item.GVR.Resource))
+	rt.set(resource, "group", t.item.GVR.Group)
+	rt.set(resource, "version", t.item.GVR.Version)
+	rt.set(resource, "resource", t.item.GVR.Resource)
 	rt.freeze(resource)
 	for _, d := range t.defs {
 		lc := rt.byName[d.Name]
-		findings, err := rt.call(lc, obj, rt.callContext(lc, resource), t.item)
+		findings, err := rt.call(lc, obj, resource, t.item)
 		res.calls++
 		if err != nil {
 			uid := string(t.item.Obj.GetUID())
-			res.failures = append(res.failures, Failure{Check: d.Name, UID: uid, Err: err})
-			res.findings = append(res.findings, errorFinding(d, t.item, err))
+			res.failures = append(res.failures, Failure{
+				Check: d.Name, UID: uid, Object: t.item.Obj.GetNamespace() + "/" + t.item.Obj.GetName(), Err: err,
+			})
 			continue
 		}
 		res.findings = append(res.findings, findings...)
@@ -299,7 +323,10 @@ func (rt *jsRuntime) run(t task) taskResult {
 	return res
 }
 
-func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, ctx *goja.Object, item Item) (findings []Finding, err error) {
+func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, resource *goja.Object, item Item) (findings []Finding, err error) {
+	if rt.broken != nil {
+		return nil, rt.broken
+	}
 	rt.current = lc
 	rt.rand = 0x9E3779B97F4A7C15
 	// A timer which fires just after the call ended must not interrupt the
@@ -324,7 +351,7 @@ func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, ctx *goja.Object, ite
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	v, err := lc.fn(goja.Undefined(), obj, ctx)
+	v, err := lc.fn(goja.Undefined(), obj, rt.callContext(lc, resource))
 	if err != nil {
 		var ie *goja.InterruptedError
 		if errors.As(err, &ie) {
@@ -404,12 +431,31 @@ func newFinding(d *Definition, item Item) Finding {
 	}
 }
 
-func errorFinding(d *Definition, item Item, err error) Finding {
-	f := newFinding(d, item)
-	f.Check, f.Category, f.Severity = ErrorCheck, CategoryHealth, "warning"
-	f.Key = d.Name
-	f.Message = fmt.Sprintf("check %s failed: %v", d.Name, err)
-	return f
+// errorFindings returns one check-error finding per failing check, not one
+// per object: a check which fails for many objects (e.g. a type in reads is
+// forbidden) is one problem. The finding belongs to no object, so it stays
+// the same finding while the failing objects change.
+func errorFindings(defs []*Definition, failures []Failure) []Finding {
+	byCheck := map[string][]Failure{}
+	for _, f := range failures {
+		byCheck[f.Check] = append(byCheck[f.Check], f)
+	}
+	var findings []Finding
+	for _, d := range defs {
+		fs := byCheck[d.Name]
+		if len(fs) == 0 {
+			continue
+		}
+		msg := fmt.Sprintf("check %s failed for %s: %v", d.Name, fs[0].Object, fs[0].Err)
+		if len(fs) > 1 {
+			msg = fmt.Sprintf("check %s failed for %d objects, e.g. %s: %v", d.Name, len(fs), fs[0].Object, fs[0].Err)
+		}
+		findings = append(findings, Finding{
+			Check: ErrorCheck, Category: CategoryHealth, Severity: "warning",
+			Key: d.Name, Message: msg,
+		})
+	}
+	return findings
 }
 
 func stringField(m map[string]any, key string) (string, error) {

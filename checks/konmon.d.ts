@@ -124,4 +124,11 @@ declare module "konmon" {
   }
 
   export function defineCheck<P>(check: CheckDefinition<P>): CheckDefinition<P>;
+
+  /**
+   * Parses an RFC3339 timestamp like Kubernetes writes them. Unlike
+   * new Date(s) it rejects timestamps without a zone (which Date reads as
+   * local time). Returns undefined for anything else.
+   */
+  export function parseTime(s: unknown): Date | undefined;
 }

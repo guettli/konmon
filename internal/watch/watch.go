@@ -58,10 +58,9 @@ type Watcher struct {
 	Events chan<- any
 	Log    *slog.Logger
 
-	mu               sync.Mutex
-	lastDiscoveryErr error
-	informers        map[schema.GroupResource]*running
-	forbidden        map[schema.GroupResource]struct{}
+	mu        sync.Mutex
+	informers map[schema.GroupResource]*running
+	forbidden map[schema.GroupResource]struct{}
 }
 
 type running struct {
@@ -170,13 +169,13 @@ type ListResult struct {
 // ListOnce lists all objects of all included types once, without
 // informers, for an ad hoc check.
 func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
-	gvrs, partial, discErr := w.discover()
-	if discErr != nil && !partial {
-		return nil, discErr
+	gvrs, partialErr, err := w.discover()
+	if err != nil {
+		return nil, err
 	}
 	res := &ListResult{}
-	if partial {
-		res.Failed = append(res.Failed, w.lastDiscoveryErr)
+	if partialErr != nil {
+		res.Failed = append(res.Failed, partialErr)
 	}
 	type result struct {
 		gvr       schema.GroupVersionResource
@@ -231,10 +230,11 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 }
 
 func (w *Watcher) refresh(ctx context.Context) error {
-	gvrs, partial, err := w.discover()
+	gvrs, partialErr, err := w.discover()
 	if err != nil {
 		return err
 	}
+	partial := partialErr != nil
 	wanted := make(map[schema.GroupResource]schema.GroupVersionResource, len(gvrs))
 	for _, gvr := range gvrs {
 		wanted[gvr.GroupResource()] = gvr
@@ -294,20 +294,19 @@ func (w *Watcher) refresh(ctx context.Context) error {
 }
 
 // discover returns the preferred version of every listable and watchable
-// resource type accepted by Include. partial is true if some API groups
+// resource type accepted by Include. partialErr is set if some API groups
 // could not be discovered.
-func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partial bool, err error) {
+func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partialErr, err error) {
 	// The package-level helper is what DiscoveryClient.ServerPreferredResources
 	// uses; calling it directly also works with the fake discovery client.
 	lists, err := discovery.ServerPreferredResources(w.Discovery)
 	if err != nil {
 		if !discovery.IsGroupDiscoveryFailedError(err) || len(lists) == 0 {
-			return nil, false, fmt.Errorf("server preferred resources: %w", err)
+			return nil, nil, fmt.Errorf("server preferred resources: %w", err)
 		}
 		// Some API groups (often an orphaned APIService) failed. Go on with the rest.
 		w.Log.Warn("partial discovery", "err", err)
-		w.lastDiscoveryErr = fmt.Errorf("discovery: %w", err)
-		partial = true
+		partialErr = fmt.Errorf("discovery: %w", err)
 	}
 	for _, list := range lists {
 		gv, err := schema.ParseGroupVersion(list.GroupVersion)
@@ -326,7 +325,7 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partial bool, 
 			gvrs = append(gvrs, gvr)
 		}
 	}
-	return gvrs, partial, nil
+	return gvrs, partialErr, nil
 }
 
 func hasVerbs(verbs metav1.Verbs, want ...string) bool {

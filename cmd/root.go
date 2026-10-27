@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,6 +39,10 @@ check-conditions, and sends alerts to Alertmanager.`,
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		var exit exitError
+		if errors.As(err, &exit) {
+			os.Exit(int(exit))
+		}
 		os.Exit(1)
 	}
 }
