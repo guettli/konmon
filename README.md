@@ -244,7 +244,7 @@ conditions:
     ignoreTypes:      [LastSyncAttempted]   # informational: both values are fine
 ```
 
-Unlike an ignore rule, a taught condition is still reported when it has its bad status, or a status other than `True`/`False` (e.g. `Unknown`; use `ignoreTypes` for types whose status is something else, like `Accepted`). The rules of the resource are looked at before `"*"`. Taught polarity wins over the built-in polarity tables of `checks/conditions.ts`; its list of known healthy states (specific reasons) still applies. If you replace `conditions.ts` with your own check, it gets the section as param `rules`. `konmon findings --config` applies only `ignore` rules, not `conditions` (stored findings are not evaluated again). If the CRD is public, please [open an issue](https://github.com/guettli/konmon/issues/new) so everybody gets it.
+Unlike an ignore rule, a taught condition is still reported when it has its bad status, or a status other than `True`/`False` (e.g. `Unknown`; use `ignoreTypes` for types whose status is something else, like `Accepted`). The rules of the resource are looked at before `"*"`. Taught polarity wins over the built-in polarity tables of `checks/conditions.ts`; its list of known healthy states (specific reasons) still applies. If you replace `conditions.ts` with your own check, it gets the section as param `rules`. `konmon findings --config` applies only `ignore` rules, not `conditions` (stored findings are not evaluated again). If the CRD is public, please tell us (see [Improve konmon](#improve-konmon)) so everybody gets it.
 
 #### Interactive: `konmon triage`
 
@@ -319,6 +319,19 @@ Run exactly one replica (one writer per database), with a PersistentVolume mount
 ## Memory and disk
 
 The informers keep all watched objects in memory, without `managedFields`. A first test on a small cluster (1,264 objects, 138 types) produced a 10 MB database, of which 2 MB were compressed revisions. Most of the size is the latest version of every object. Revisions grow with the change rate of the cluster. Use `--no-revisions-for` for types that change often but whose history you don't need.
+
+## Improve konmon
+
+konmon's knowledge about conditions grows with every report. If konmon reports something healthy, misses something, or does something wrong, please tell us. It takes a minute:
+
+```console
+konmon report false-positive --check conditions --resource widgets.example.com \
+  --condition Stalled --status True --reason Waiting
+konmon report check-idea --title "detect expired certificates"
+konmon report bug
+```
+
+Each prints a link to a prefilled GitHub issue (add `--open` to open it). Nothing is sent automatically, and object names and messages are left out; you see and edit everything before you submit. `konmon triage` prints the same link after you teach the polarity of a CRD condition. Or open an issue directly: [false positive](https://github.com/guettli/konmon/issues/new?template=false-positive.yml), [check idea](https://github.com/guettli/konmon/issues/new?template=check-idea.yml), [bug](https://github.com/guettli/konmon/issues/new?template=bug.yml).
 
 ## Development
 

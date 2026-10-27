@@ -1,0 +1,23 @@
+name: Check idea
+description: Something konmon should detect, or a check which should work differently.
+title: "Check idea: "
+labels: [check-idea]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: konmon version
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should konmon detect?
+      description: The broken state, and how you noticed it.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example object (YAML, without secrets)
+      render: yaml

@@ -37,7 +37,9 @@ JavaScript, and your own ones.
 Ad hoc:      konmon check --context prod
 Monitoring:  konmon run, which keeps a local copy with history in SQLite
              and sends alerts to Alertmanager; query it with 'konmon
-             findings' and 'konmon history'.`,
+             findings' and 'konmon history'.
+False positives: 'konmon triage' fixes them in your config file, and
+'konmon report' tells the maintainers.`,
 	SilenceUsage: true,
 }
 
