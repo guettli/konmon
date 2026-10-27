@@ -8,6 +8,7 @@ require (
 	github.com/guettli/check-conditions v0.0.67
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.24.0
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
@@ -52,7 +53,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

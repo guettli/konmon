@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
-	"regexp"
 	"sync/atomic"
 	"time"
 
@@ -39,8 +38,9 @@ type Notifier interface {
 // Config configures a Monitor.
 type Config struct {
 	Checks *checks.Engine
-	// IgnoreFindings drops findings whose Subject matches.
-	IgnoreFindings []*regexp.Regexp
+	// Ignore drops findings (config rules, --ignore-finding-regex). nil
+	// drops none.
+	Ignore func(f *checks.Finding, now time.Time) bool
 	// ExcludeNamespaces are glob patterns of namespaces to ignore completely.
 	ExcludeNamespaces []string
 	// StoreType decides which resource types are written to the database.
@@ -345,7 +345,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	}
 	current := make([]checks.Finding, 0, len(res.Findings))
 	for i := range res.Findings {
-		if !m.ignored(&res.Findings[i]) {
+		if m.cfg.Ignore == nil || !m.cfg.Ignore(&res.Findings[i], now) {
 			current = append(current, res.Findings[i])
 		}
 	}
@@ -430,19 +430,6 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
 		}
 	}
 	return m.notifier.Notify(ctx, now, firing, nil)
-}
-
-func (m *Monitor) ignored(f *checks.Finding) bool {
-	if len(m.cfg.IgnoreFindings) == 0 {
-		return false
-	}
-	subject := f.Subject()
-	for _, re := range m.cfg.IgnoreFindings {
-		if re.MatchString(subject) {
-			return true
-		}
-	}
-	return false
 }
 
 // StoreHistory gives checks the condition history read from the store.

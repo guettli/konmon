@@ -97,7 +97,7 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	if err != nil {
 		return err
 	}
-	ignore, err := checkOpts.checks.ignoreRegexps()
+	ignore, err := checkOpts.checks.ignorer()
 	if err != nil {
 		return err
 	}
@@ -146,10 +146,16 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	if err != nil {
 		return err
 	}
+	ignore.warnExpired(log, now)
 	var shown []shownFinding
+	ignored := 0
 	for i := range res.Findings {
 		f := &res.Findings[i]
-		if matchAny(ignore, f.Subject()) || !checkOpts.filter.match(f) {
+		if !checkOpts.filter.match(f) {
+			continue
+		}
+		if ignore.ignored(f, now) {
+			ignored++
 			continue
 		}
 		shown = append(shown, shownFinding{f, f.Line(now)})
@@ -170,6 +176,7 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 		result := checkResult{
 			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked,
 			Objects: res.Objects, Types: len(available), Checks: len(engine.Checks()), DurationMS: took.Milliseconds(),
+			Ignored: ignored,
 		}
 		for _, s := range shown {
 			result.Findings = append(result.Findings, toJSONFinding(s.finding))
@@ -193,7 +200,7 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 		}
 		_, _ = fmt.Fprintf(out, "Checked %s of %s with %s in %s: %s.\n",
 			plural(res.Objects, "object"), plural(len(available), "type"), plural(len(engine.Checks()), "check"), took.Round(time.Millisecond),
-			checkOpts.filter.countText(health, hygiene))
+			checkOpts.filter.countText(health, hygiene)+ignoredText(ignored))
 	}
 	if health > 0 {
 		return errFindings
@@ -213,10 +220,12 @@ type checkResult struct {
 	// NotChecked are errors of resource types or API groups which could
 	// not be listed.
 	NotChecked []string `json:"notChecked"`
-	Objects    int      `json:"objects"`
-	Types      int      `json:"types"`
-	Checks     int      `json:"checks"`
-	DurationMS int64    `json:"durationMs"`
+	// Ignored is the number of findings dropped by ignore rules.
+	Ignored    int   `json:"ignored"`
+	Objects    int   `json:"objects"`
+	Types      int   `json:"types"`
+	Checks     int   `json:"checks"`
+	DurationMS int64 `json:"durationMs"`
 }
 
 func matchGlob(s string, patterns []string) bool {

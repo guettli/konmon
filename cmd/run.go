@@ -143,10 +143,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ignore, err := runOpts.checks.ignoreRegexps()
+	ignore, err := runOpts.checks.ignorer()
 	if err != nil {
 		return err
 	}
+	ignore.warnExpired(log, time.Now())
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)
@@ -191,7 +192,7 @@ func run(ctx context.Context) error {
 	}
 	mon := monitor.New(monitor.Config{
 		Checks:            engine,
-		IgnoreFindings:    ignore,
+		Ignore:            ignore.ignored,
 		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,
