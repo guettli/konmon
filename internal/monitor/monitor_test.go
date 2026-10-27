@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -107,7 +106,7 @@ func newTestMonitor(t *testing.T, src Source, n Notifier) (*Monitor, *store.Stor
 		For:               time.Minute,
 		EvalInterval:      30 * time.Second,
 		ResendResolved:    15 * time.Minute,
-		Log:               slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:               slog.New(slog.DiscardHandler),
 	}, st, src, n)
 	return m, st
 }
@@ -347,7 +346,7 @@ export default { name: "slow", forSeconds: 300, match: { resources: ["jobs.batch
 	n := &recordingNotifier{}
 	m := New(Config{
 		Checks: engine, For: time.Minute, EvalInterval: 30 * time.Second, ResendResolved: 15 * time.Minute,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log: slog.New(slog.DiscardHandler),
 	}, st, src, n)
 	ctx := context.Background()
 	for _, at := range []time.Duration{0, 2 * time.Minute} {

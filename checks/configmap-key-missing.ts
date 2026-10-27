@@ -45,9 +45,19 @@ export default defineCheck({
       }
     }
     for (const v of spec.volumes ?? []) {
-      if (v.configMap) check(v.configMap.name, (v.configMap.items ?? []).map((i: any) => i.key), v.configMap.optional);
+      if (v.configMap)
+        check(
+          v.configMap.name,
+          (v.configMap.items ?? []).map((i: any) => i.key),
+          v.configMap.optional,
+        );
       for (const src of v.projected?.sources ?? []) {
-        if (src.configMap) check(src.configMap.name, (src.configMap.items ?? []).map((i: any) => i.key), src.configMap.optional);
+        if (src.configMap)
+          check(
+            src.configMap.name,
+            (src.configMap.items ?? []).map((i: any) => i.key),
+            src.configMap.optional,
+          );
       }
     }
     return findings;

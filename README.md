@@ -336,15 +336,13 @@ Each prints a link to a prefilled GitHub issue (add `--open` to open it). Nothin
 ## Development
 
 ```console
-go test -race ./...
-go run . checks test
-(cd checks && npx -p typescript@5.9.3 tsc -p .)
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run
+make check   # tests, release builds, golangci-lint, actionlint, govulncheck, tsc, prettier
+make fmt     # format Go and TypeScript
 ```
 
 The core checks are a port of check-conditions. `internal/checks/corpus_test.go` compares both on the same objects; with `KONMON_CORPUS_DB=konmon.db` it uses the objects of a real database. On three clusters (about 2,000 objects) the results are identical. A full evaluation of 900 objects takes about 8 ms.
 
-CI runs tests and lint on every push and pull request. After CI succeeds on `main`, the release workflow bumps the patch version, creates a GitHub release with binaries and pushes the image.
+CI runs on pull requests and on main: tests with the race detector, the check tests, a build of every release target, lint (golangci-lint, actionlint, govulncheck, `go mod tidy`), a type check and formatting check of the TypeScript checks, and an image build. CI also runs weekly, so govulncheck reports new vulnerabilities. Actions are pinned by commit; Dependabot updates them, the Go modules and the tool versions (`tools/go.mod`, `package.json`) weekly. After CI succeeds on `main`, the release workflow bumps the patch version, creates a GitHub release with binaries and pushes the image.
 
 ## License
 

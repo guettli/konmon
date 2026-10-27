@@ -20,7 +20,11 @@ export default defineCheck({
     for (const c of spec?.containers ?? []) {
       const r = c.resources ?? {};
       if (Object.keys(r.requests ?? {}).length === 0 && Object.keys(r.limits ?? {}).length === 0) {
-        findings.push({ key: c.name, container: c.name, message: `container ${c.name} has no resource requests or limits` });
+        findings.push({
+          key: c.name,
+          container: c.name,
+          message: `container ${c.name} has no resource requests or limits`,
+        });
       }
     }
     return findings;

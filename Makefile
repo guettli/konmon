@@ -1,0 +1,42 @@
+# The checks of CI. `make check` before a pull request.
+# Tool versions: tools/go.mod and package.json (updated by Dependabot).
+GO_TOOL := go tool -modfile=tools/go.mod
+GOLANGCI_LINT := $(GO_TOOL) golangci-lint
+ACTIONLINT := $(GO_TOOL) actionlint
+GOVULNCHECK := $(GO_TOOL) govulncheck
+TSC := npx --no-install tsc
+PRETTIER := npx --no-install prettier
+
+.PHONY: check test build-all lint typescript fmt
+
+check: test build-all lint typescript
+
+test:
+	go test -race ./...
+	go run . checks test --checks examples
+
+# The targets of the release.
+build-all:
+	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+		CGO_ENABLED=0 GOOS=$${target%/*} GOARCH=$${target#*/} go build -trimpath -o /dev/null . || exit 1; \
+	done
+
+lint:
+	$(GOLANGCI_LINT) run
+	$(ACTIONLINT)
+	$(GOVULNCHECK) ./...
+	go mod tidy && git diff --exit-code go.mod go.sum
+	cd tools && go mod tidy && git diff --exit-code go.mod go.sum
+
+node_modules: package.json package-lock.json
+	npm ci --ignore-scripts --no-audit --no-fund
+
+typescript: node_modules
+	cd checks && $(TSC) -p .
+	cd examples && $(TSC) -p .
+	$(PRETTIER) --check 'checks/*.ts' 'examples/*.ts'
+
+# Fix formatting of Go and TypeScript.
+fmt: node_modules
+	$(GOLANGCI_LINT) fmt
+	$(PRETTIER) --write 'checks/*.ts' 'examples/*.ts'

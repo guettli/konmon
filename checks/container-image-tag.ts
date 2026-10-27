@@ -29,7 +29,11 @@ export default defineCheck({
     for (const c of [...(spec?.initContainers ?? []), ...(spec?.containers ?? [])]) {
       const t = tag(String(c.image ?? ""));
       if (t === undefined) {
-        findings.push({ key: c.name, container: c.name, message: `container ${c.name} uses image ${c.image} without a tag` });
+        findings.push({
+          key: c.name,
+          container: c.name,
+          message: `container ${c.name} uses image ${c.image} without a tag`,
+        });
       } else if (t === "latest") {
         findings.push({ key: c.name, container: c.name, message: `container ${c.name} uses image ${c.image}` });
       }

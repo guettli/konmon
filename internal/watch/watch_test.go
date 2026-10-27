@@ -2,7 +2,6 @@ package watch
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"testing"
 	"time"
@@ -60,7 +59,7 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 		Discovery: disc,
 		Include:   func(gr schema.GroupResource) bool { return gr.Resource != "cronjobs" },
 		Events:    events,
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:       slog.New(slog.DiscardHandler),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

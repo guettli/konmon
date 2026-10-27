@@ -21,18 +21,17 @@ export default defineCheck({
     const scName = pvc.spec?.storageClassName;
     if (scName && ctx.has("storageclasses.storage.k8s.io")) {
       const sc = ctx.get("storageclasses.storage.k8s.io", null, scName);
-      if (!sc) return [{ message: `PersistentVolumeClaim is Pending: StorageClass ${scName} does not exist`, since: created }];
+      if (!sc)
+        return [{ message: `PersistentVolumeClaim is Pending: StorageClass ${scName} does not exist`, since: created }];
       if (sc.volumeBindingMode === "WaitForFirstConsumer") {
-        const used = ctx
-          .list("pods", { namespace: pvc.metadata.namespace })
-          .some((p) =>
-            (p.spec?.volumes ?? []).some(
-              (v: any) =>
-                v.persistentVolumeClaim?.claimName === pvc.metadata.name ||
-                // A generic ephemeral volume's claim is named <pod>-<volume>.
-                (v.ephemeral && `${p.metadata.name}-${v.name}` === pvc.metadata.name),
-            ),
-          );
+        const used = ctx.list("pods", { namespace: pvc.metadata.namespace }).some((p) =>
+          (p.spec?.volumes ?? []).some(
+            (v: any) =>
+              v.persistentVolumeClaim?.claimName === pvc.metadata.name ||
+              // A generic ephemeral volume's claim is named <pod>-<volume>.
+              (v.ephemeral && `${p.metadata.name}-${v.name}` === pvc.metadata.name),
+          ),
+        );
         if (!used) return [];
       }
     }

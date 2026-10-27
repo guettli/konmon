@@ -15,7 +15,11 @@ export default defineCheck({
     // Nothing will create Pods: finished Jobs, workloads scaled to zero,
     // suspended CronJobs.
     if (obj.spec?.replicas === 0 || obj.spec?.suspend === true) return [];
-    if ((obj.status?.conditions ?? []).some((c: any) => (c.type === "Complete" || c.type === "Failed") && c.status === "True")) {
+    if (
+      (obj.status?.conditions ?? []).some(
+        (c: any) => (c.type === "Complete" || c.type === "Failed") && c.status === "True",
+      )
+    ) {
       return [];
     }
     if (!ctx.has("serviceaccounts")) return [];

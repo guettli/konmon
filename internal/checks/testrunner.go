@@ -2,6 +2,7 @@ package checks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -64,7 +65,7 @@ func ParseTestFile(data []byte) (*TestFile, error) {
 		return nil, err
 	}
 	if tf.Check == "" {
-		return nil, fmt.Errorf("check is missing")
+		return nil, errors.New("check is missing")
 	}
 	return &tf, nil
 }
@@ -194,7 +195,7 @@ func (e *Engine) runCase(def *Definition, tc *TestCase) error {
 
 func testItem(resource, version string, obj map[string]any) (Item, error) {
 	if obj == nil {
-		return Item{}, fmt.Errorf("missing")
+		return Item{}, errors.New("missing")
 	}
 	gr, err := ParseResource(resource)
 	if err != nil {
@@ -301,7 +302,10 @@ func equalField(k string, got, want any) bool {
 func formatFindings(fs []Finding, now time.Time) string {
 	var b strings.Builder
 	for i := range fs {
-		data, _ := json.Marshal(findingFields(&fs[i]))
+		data, err := json.Marshal(findingFields(&fs[i]))
+		if err != nil {
+			data = []byte(err.Error()) // only for the message of a failed test
+		}
 		fmt.Fprintf(&b, "    %s\n      %s\n", fs[i].Line(now), data)
 	}
 	return b.String()

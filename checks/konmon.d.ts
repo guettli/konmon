@@ -150,7 +150,10 @@ declare module "konmon" {
   }
 
   /** Whether labels match a metav1.LabelSelector. A null selector matches nothing. */
-  export function matchesSelector(labels: Readonly<Record<string, string>> | undefined, selector: LabelSelector | null | undefined): boolean;
+  export function matchesSelector(
+    labels: Readonly<Record<string, string>> | undefined,
+    selector: LabelSelector | null | undefined,
+  ): boolean;
 
   /** Whether a selector is set but empty (it matches everything). */
   export function isEmptySelector(selector: LabelSelector | null | undefined): boolean;

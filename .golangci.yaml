@@ -4,6 +4,21 @@ linters:
   enable:
     - bodyclose
     - contextcheck
+    - durationcheck
+    - errchkjson
+    - errname
+    - exptostd
+    - fatcontext
+    - intrange
+    - makezero
+    - nakedret
+    - perfsprint
+    - predeclared
+    - reassign
+    - sloglint
+    - thelper
+    - usetesting
+    - wastedassign
     - copyloopvar
     - errorlint
     - gocritic
