@@ -73,6 +73,8 @@ func TestTriage(t *testing.T) {
 		"5 findings in 4 groups",
 		"[1/4] conditions  widgets.example.com  Stalled=True Waiting",
 		"Note: the current status True is unhealthy by this rule",
+		"If widgets.example.com is a public CRD, please tell the maintainers",
+		"https://github.com/guettli/konmon/issues/new?",
 		"A comment is required.",
 		"Saved 4 changes",
 	} {

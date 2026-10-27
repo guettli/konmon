@@ -1,0 +1,51 @@
+name: False positive
+description: konmon reports something which is healthy (e.g. a condition of a CRD it does not know).
+title: "False positive: "
+labels: [false-positive]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Tip: `konmon report false-positive` fills this form from the command line.
+        Please remove anything you do not want to make public (names, messages).
+  - type: input
+    id: version
+    attributes:
+      label: konmon version
+      placeholder: v0.0.7 (konmon version)
+    validations:
+      required: true
+  - type: input
+    id: check
+    attributes:
+      label: Check
+      placeholder: conditions
+    validations:
+      required: true
+  - type: input
+    id: resource
+    attributes:
+      label: Resource type
+      description: resource.group, e.g. widgets.example.com, and where the CRD comes from (project, chart, version).
+      placeholder: widgets.example.com (widget-operator v1.2)
+    validations:
+      required: true
+  - type: input
+    id: finding
+    attributes:
+      label: Finding
+      description: For conditions, Type=Status Reason.
+      placeholder: Stalled=True Waiting
+  - type: textarea
+    id: rule
+    attributes:
+      label: Suggested rule
+      description: The config you use to fix it (konmon triage writes it).
+      render: yaml
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is it healthy?
+      description: A link to the documentation of the condition helps a lot.
+    validations:
+      required: true

@@ -472,6 +472,13 @@ func (t *triageSession) teach(g *triageGroup) (bool, error) {
 	if (list == config.HealthyWhenTrue && g.status == "False") || (list == config.HealthyWhenFalse && g.status == "True") {
 		t.printf("  Note: the current status %s is unhealthy by this rule, these findings stay.\n", g.status)
 	}
+	if strings.Contains(g.resource, ".") && !strings.HasSuffix(g.resource, ".k8s.io") {
+		// A custom resource: if it is public, everybody should get the rule.
+		rule := fmt.Sprintf("conditions:\n  %s:\n    %s: [%s]\n", g.resource, list, strings.Join(types, ", "))
+		t.printf("  If %s is a public CRD, please tell the maintainers of konmon, so everybody gets this rule\n"+
+			"  (nothing is sent, you edit it before you submit):\n  %s\n",
+			g.resource, falsePositiveURL(g.check, g.resource, g.condition, g.status, g.reason, rule))
+	}
 	return true, nil
 }
 
