@@ -1,0 +1,23 @@
+check: rbac-binding-dangling
+cases:
+  - name: missing role, missing service accounts are fine
+    resource: rolebindings.rbac.authorization.k8s.io
+    available: [roles.rbac.authorization.k8s.io, clusterroles.rbac.authorization.k8s.io]
+    object:
+      metadata: {name: b, namespace: default}
+      roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: reader}
+      subjects:
+        - {kind: ServiceAccount, name: app}
+        - {kind: User, name: alice}
+    expect:
+      - {message: binding references the Role reader which does not exist}
+  - name: cluster role binding ok
+    resource: clusterrolebindings.rbac.authorization.k8s.io
+    available: [roles.rbac.authorization.k8s.io]
+    object:
+      metadata: {name: b}
+      roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+      subjects: [{kind: ServiceAccount, name: app, namespace: x}]
+    related:
+      - {resource: clusterroles.rbac.authorization.k8s.io, object: {metadata: {name: view}}}
+    expect: []

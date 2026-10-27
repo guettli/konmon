@@ -1,0 +1,28 @@
+check: selector-matches-no-pods
+cases:
+  - name: pdb without pods
+    resource: poddisruptionbudgets.policy
+    object:
+      kind: PodDisruptionBudget
+      metadata: {name: b, namespace: default}
+      spec: {selector: {matchLabels: {app: gone}}}
+    related:
+      - {resource: pods, object: {metadata: {name: p, namespace: default, labels: {app: web}}}}
+    expect:
+      - {message: PodDisruptionBudget selects no Pods}
+  - name: network policy with matching pod, and default-deny
+    resource: networkpolicies.networking.k8s.io
+    object:
+      kind: NetworkPolicy
+      metadata: {name: n, namespace: default}
+      spec: {podSelector: {matchExpressions: [{key: app, operator: Exists}]}}
+    related:
+      - {resource: pods, object: {metadata: {name: p, namespace: default, labels: {app: web}}}}
+    expect: []
+  - name: default deny
+    resource: networkpolicies.networking.k8s.io
+    available: [pods]
+    object:
+      metadata: {name: deny, namespace: default}
+      spec: {podSelector: {}}
+    expect: []

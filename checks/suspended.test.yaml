@@ -1,0 +1,16 @@
+check: suspended
+cases:
+  - name: suspended cronjob
+    resource: cronjobs.batch
+    object: {kind: CronJob, metadata: {name: c, namespace: default}, spec: {suspend: true}}
+    expect:
+      - {message: CronJob is suspended}
+  - name: cordoned node
+    resource: nodes
+    object: {metadata: {name: n}, spec: {unschedulable: true}}
+    expect:
+      - {message: Node is cordoned (unschedulable)}
+  - name: running job
+    resource: jobs.batch
+    object: {metadata: {name: j, namespace: default}, spec: {suspend: false}}
+    expect: []

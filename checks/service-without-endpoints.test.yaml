@@ -1,0 +1,40 @@
+check: service-without-endpoints
+cases:
+  - name: no endpoints
+    resource: services
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web, tier: front}}
+    expect:
+      - {message: "Service has no endpoints: no Pod matches the selector app=web,tier=front"}
+  - name: endpoints not ready
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web}}
+    related:
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: web-x, namespace: default, labels: {kubernetes.io/service-name: web}}
+          endpoints: [{addresses: [10.0.0.1], conditions: {ready: false}}]
+    expect:
+      - {message: "Service has 1 endpoints, none ready (selector app=web)"}
+  - name: ready endpoint, also without conditions
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web}}
+    related:
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: web-x, namespace: default, labels: {kubernetes.io/service-name: web}}
+          endpoints: [{addresses: [10.0.0.1]}]
+    expect: []
+  - name: no selector or ExternalName
+    resource: services
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: ext, namespace: default}
+      spec: {type: ExternalName, externalName: example.com}
+    expect: []

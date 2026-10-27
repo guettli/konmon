@@ -185,9 +185,10 @@ func storeType(e *checks.Engine) func(schema.GroupResource) bool {
 	return e.Store
 }
 
-// warnUnserved logs resources which checks name in match or reads but the
-// cluster does not serve: usually a typo or a missing group ("deployments"
-// is the core group, which has no deployments; use "deployments.apps").
+// warnUnserved logs core-group resources (names without a dot) which checks
+// name in match or reads but the cluster does not serve: usually a missing
+// group ("deployments" is the core group; use "deployments.apps"). Names
+// with a group are not reported: checks for optional CRDs are normal.
 func warnUnserved(e *checks.Engine, disc discovery.DiscoveryInterface, log *slog.Logger) {
 	lists, err := discovery.ServerPreferredResources(disc)
 	if err != nil {
@@ -208,8 +209,8 @@ func warnUnserved(e *checks.Engine, disc discovery.DiscoveryInterface, log *slog
 	for _, d := range e.Checks() {
 		for _, r := range append(append([]string{}, d.MatchResources...), d.ReadsResources...) {
 			gr, err := checks.ParseResource(r)
-			if err != nil {
-				continue // "*"
+			if err != nil || gr.Group != "" {
+				continue // "*" or a resource with a group
 			}
 			if _, ok := served[gr]; !ok {
 				log.Warn("check names a resource the cluster does not serve", "check", d.Name, "resource", r,

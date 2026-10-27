@@ -1,0 +1,15 @@
+konmon
+Copyright 2026 Thomas Güttler
+
+This product includes checks ported from the following projects, licensed
+under the Apache License, Version 2.0. The files in checks/ name their
+source in their header.
+
+check-conditions (https://github.com/guettli/check-conditions)
+Copyright Thomas Güttler
+
+k8sgpt (https://github.com/k8sgpt-ai/k8sgpt)
+Copyright The K8sGPT Authors
+
+Popeye (https://github.com/derailed/popeye)
+Copyright © 2020, Imhotep Software LLC

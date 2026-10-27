@@ -1,0 +1,26 @@
+check: ingress-backend-missing
+cases:
+  - name: missing service, wrong port, good backend
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: i, namespace: default}
+      spec:
+        defaultBackend: {service: {name: web, port: {name: http}}}
+        rules:
+          - http:
+              paths:
+                - backend: {service: {name: gone, port: {number: 80}}}
+                - backend: {service: {name: web, port: {number: 8080}}}
+                - backend: {resource: {apiGroup: x, kind: Bucket, name: b}}
+      status:
+        loadBalancer:
+          ingress: [{ip: 1.2.3.4, ports: [{port: 443, protocol: TCP, error: "port conflict"}]}]
+    related:
+      - resource: services
+        object:
+          metadata: {name: web, namespace: default}
+          spec: {ports: [{name: http, port: 80}]}
+    expect:
+      - {key: "gone:80", message: Ingress uses the Service gone which does not exist}
+      - {key: "web:8080", message: "Ingress uses port 8080 of Service web, which the Service does not define"}
+      - {message: "load balancer port 443: port conflict"}

@@ -397,6 +397,14 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 		if f.Container, err = stringField(m, "container"); err != nil {
 			return nil, fmt.Errorf("finding %d: %w", i, err)
 		}
+		if sev, err := stringField(m, "severity"); err != nil {
+			return nil, fmt.Errorf("finding %d: %w", i, err)
+		} else if sev != "" {
+			if !validSeverity(sev) {
+				return nil, fmt.Errorf("finding %d: severity must be critical, warning or info", i)
+			}
+			f.Severity = sev
+		}
 		if s, ok := m["since"]; ok && s != nil {
 			if f.Since, err = toTime(s); err != nil {
 				return nil, fmt.Errorf("finding %d: since: %w", i, err)

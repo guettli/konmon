@@ -54,6 +54,8 @@ declare module "konmon" {
     container?: string;
     /** Extra values, become alert annotations. */
     details?: Record<string, string | number | boolean>;
+    /** Overrides the severity of the check for this finding. */
+    severity?: "critical" | "warning" | "info";
   }
 
   /** The resource type of the checked object. */
@@ -131,4 +133,29 @@ declare module "konmon" {
    * local time). Returns undefined for anything else.
    */
   export function parseTime(s: unknown): Date | undefined;
+
+  export interface LabelSelector {
+    readonly matchLabels?: Readonly<Record<string, string>>;
+    readonly matchExpressions?: readonly {
+      readonly key: string;
+      readonly operator: "In" | "NotIn" | "Exists" | "DoesNotExist";
+      readonly values?: readonly string[];
+    }[];
+  }
+
+  /** Whether labels match a metav1.LabelSelector. A null selector matches nothing. */
+  export function matchesSelector(labels: Readonly<Record<string, string>> | undefined, selector: LabelSelector | null | undefined): boolean;
+
+  /** Whether a selector is set but empty (it matches everything). */
+  export function isEmptySelector(selector: LabelSelector | null | undefined): boolean;
+
+  /**
+   * The pod spec of a Pod or of the template of a workload (deployments,
+   * statefulsets, daemonsets, replicasets, replicationcontrollers, jobs,
+   * cronjobs); resource is ctx.resource.resource. undefined otherwise.
+   */
+  export function podSpec(obj: KubeObject, resource: string): any;
+
+  /** The labels of a Pod or of the pod template of a workload. */
+  export function podLabels(obj: KubeObject, resource: string): Readonly<Record<string, string>>;
 }

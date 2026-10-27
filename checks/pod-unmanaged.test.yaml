@@ -1,0 +1,15 @@
+check: pod-unmanaged
+cases:
+  - name: naked pod
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status: {phase: Running}
+    expect:
+      - {message: Pod is not managed by a controller}
+  - name: managed, mirror or finished
+    resource: pods
+    object:
+      metadata: {name: p, namespace: kube-system, annotations: {kubernetes.io/config.mirror: abc}}
+      status: {phase: Running}
+    expect: []

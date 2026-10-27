@@ -1,0 +1,24 @@
+check: hpa-target-missing
+cases:
+  - name: missing deployment
+    resource: horizontalpodautoscalers.autoscaling
+    available: [deployments.apps, statefulsets.apps, replicasets.apps, replicationcontrollers]
+    object:
+      metadata: {name: h, namespace: default}
+      spec: {scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: web}}
+    expect:
+      - {message: HorizontalPodAutoscaler scales Deployment web which does not exist}
+  - name: lower case kind, target exists
+    resource: horizontalpodautoscalers.autoscaling
+    object:
+      metadata: {name: h, namespace: default}
+      spec: {scaleTargetRef: {kind: statefulset, name: db}}
+    related:
+      - {resource: statefulsets.apps, object: {metadata: {name: db, namespace: default}}}
+    expect: []
+  - name: other kind is not checked
+    resource: horizontalpodautoscalers.autoscaling
+    object:
+      metadata: {name: h, namespace: default}
+      spec: {scaleTargetRef: {apiVersion: argoproj.io/v1alpha1, kind: Rollout, name: r}}
+    expect: []

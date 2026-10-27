@@ -1,0 +1,15 @@
+check: pod-evicted
+cases:
+  - name: evicted
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status: {phase: Failed, reason: Evicted, message: "The node was low on resource: memory."}
+    expect:
+      - {message: "evicted: The node was low on resource: memory."}
+  - name: running
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status: {phase: Running}
+    expect: []

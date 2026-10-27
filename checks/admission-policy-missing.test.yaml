@@ -1,0 +1,19 @@
+check: admission-policy-missing
+cases:
+  - name: binding without policy
+    resource: validatingadmissionpolicybindings.admissionregistration.k8s.io
+    available: [validatingadmissionpolicies.admissionregistration.k8s.io]
+    object:
+      metadata: {name: b}
+      spec: {policyName: p}
+    expect:
+      - {message: binding references the ValidatingAdmissionPolicy p which does not exist}
+  - name: type-check warning
+    resource: validatingadmissionpolicies.admissionregistration.k8s.io
+    object:
+      metadata: {name: p}
+      status:
+        typeChecking:
+          expressionWarnings: [{fieldRef: "spec.validations[0].expression", warning: "no such key: foo"}]
+    expect:
+      - {key: "spec.validations[0].expression", message: "CEL type-check warning at spec.validations[0].expression: no such key: foo"}

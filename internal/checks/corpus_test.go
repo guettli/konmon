@@ -46,7 +46,7 @@ func TestCorpusMatchesCheckConditions(t *testing.T) {
 
 func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 	t.Helper()
-	e, err := Load(CoreFiles().Sources, nil, Options{})
+	e, err := Load(portedSources(), nil, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,28 @@ func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 // intendedDifference reports findings of check-conditions which the
 // konmon checks deliberately do not report (rules added after the port).
 func intendedDifference(f *checkconditions.Finding) bool {
-	return f.Kind == checkconditions.FindingCondition && f.Status == "False" &&
-		len(f.ConditionTypes) == 1 && f.ConditionTypes[0] == "Suspended"
+	if f.Kind != checkconditions.FindingCondition || len(f.ConditionTypes) != 1 {
+		return false
+	}
+	switch {
+	case f.ConditionTypes[0] == "Suspended" && f.Status == "False":
+		return true
+	case f.GVR.Resource == "horizontalpodautoscalers" && f.ConditionTypes[0] == "ScalingLimited" && f.Reason == "TooFewReplicas":
+		return true
+	}
+	return false
+}
+
+// portedSources are the core checks ported from check-conditions.
+func portedSources() []Source {
+	var result []Source
+	for _, s := range CoreFiles().Sources {
+		switch s.Path {
+		case "core/conditions.ts", "core/deletion-timestamp.ts", "core/pod-container-restarts.ts":
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 func goKey(f *checkconditions.Finding) string {
@@ -195,7 +215,7 @@ func BenchmarkEvaluate(b *testing.B) {
 			available = append(available, it.GVR)
 		}
 	}
-	e, err := Load(CoreFiles().Sources, nil, Options{})
+	e, err := Load(portedSources(), nil, Options{})
 	if err != nil {
 		b.Fatal(err)
 	}

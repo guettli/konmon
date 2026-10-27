@@ -1,0 +1,31 @@
+check: pod-container-waiting
+cases:
+  - name: image pull back-off
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        initContainerStatuses:
+          - {name: init, state: {running: {}}}
+        containerStatuses:
+          - {name: app, state: {waiting: {reason: ImagePullBackOff, message: 'Back-off pulling image "nope:1"'}}}
+    expect:
+      - {key: app, container: app, message: 'container app is waiting: ImagePullBackOff: Back-off pulling image "nope:1"'}
+  - name: config error without message
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses:
+          - {name: app, state: {waiting: {reason: CreateContainerConfigError}}}
+    expect:
+      - {message: "container app is waiting: CreateContainerConfigError"}
+  - name: starting and crash looping are not reported here
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses:
+          - {name: a, state: {waiting: {reason: ContainerCreating}}}
+          - {name: b, state: {waiting: {reason: CrashLoopBackOff}}}
+    expect: []

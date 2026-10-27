@@ -178,6 +178,10 @@ const ignore: RegExp[] = [
   /resourceslices Resources=Accepted ResourceSliceResourcesAccepted/, // authentication.liqo.io
   /virtualnodes (Node|VirtualKubelet)=Running /, // offloading.liqo.io
 
+  // An HPA at minReplicas which would like fewer replicas: normal. (k8sgpt
+  // ignores it too; added after the port from check-conditions.)
+  /horizontalpodautoscalers ScalingLimited=True TooFewReplicas/,
+
   // Tigera / Calico operator
   /tigerastatuses Progressing=False AllObjectsAvailable/,
   /installations Progressing=False AllObjectsAvailable/,

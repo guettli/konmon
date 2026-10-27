@@ -178,3 +178,13 @@ cases:
           - {type: Suspended, status: "False", reason: NotSuspended, message: Sandbox is not suspended}
           - {type: Ready, status: "True"}
     expect: []
+
+  - name: HPA at its minimum
+    resource: horizontalpodautoscalers.autoscaling
+    object:
+      metadata: {name: h, namespace: default}
+      status:
+        conditions:
+          - {type: AbleToScale, status: "True"}
+          - {type: ScalingLimited, status: "True", reason: TooFewReplicas, message: the desired replica count is less than the minimum replica count}
+    expect: []

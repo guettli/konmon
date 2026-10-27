@@ -1,0 +1,36 @@
+check: webhook-service-unavailable
+cases:
+  - name: missing service and service without endpoints
+    resource: validatingwebhookconfigurations.admissionregistration.k8s.io
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: policy}
+      webhooks:
+        - name: a.example.com
+          clientConfig: {service: {name: gone, namespace: sys}}
+        - name: b.example.com
+          failurePolicy: Ignore
+          clientConfig: {service: {name: hook, namespace: sys}}
+        - name: c.example.com
+          clientConfig: {url: "https://example.com/hook"}
+    related:
+      - resource: services
+        object: {metadata: {name: hook, namespace: sys}, spec: {selector: {app: hook}}}
+    expect:
+      - {key: a.example.com, message: "webhook a.example.com uses the Service sys/gone which does not exist (failurePolicy Fail)"}
+      - {key: b.example.com, message: "webhook b.example.com: Service sys/hook has no ready endpoints (failurePolicy Ignore)"}
+  - name: ready
+    resource: mutatingwebhookconfigurations.admissionregistration.k8s.io
+    object:
+      metadata: {name: m}
+      webhooks:
+        - name: a.example.com
+          clientConfig: {service: {name: hook, namespace: sys}}
+    related:
+      - resource: services
+        object: {metadata: {name: hook, namespace: sys}, spec: {selector: {app: hook}}}
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: hook-1, namespace: sys, labels: {kubernetes.io/service-name: hook}}
+          endpoints: [{addresses: [10.0.0.1], conditions: {ready: true}}]
+    expect: []

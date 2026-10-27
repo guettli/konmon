@@ -108,9 +108,7 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	if d.Severity == "" {
 		d.Severity = "warning"
 	}
-	switch d.Severity {
-	case "critical", "warning", "info":
-	default:
+	if !validSeverity(d.Severity) {
 		return nil, fmt.Errorf("%s: severity must be critical, warning or info", src.Path)
 	}
 	if len(d.MatchResources) == 0 {
@@ -180,6 +178,10 @@ func (d *Definition) setParams(overrides map[string]string) error {
 		d.Params[k] = v
 	}
 	return nil
+}
+
+func validSeverity(s string) bool {
+	return s == "critical" || s == "warning" || s == "info"
 }
 
 // globMatch reports whether name matches any of the patterns (path.Match).
