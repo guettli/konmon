@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,29 @@ func TestIgnorer(t *testing.T) {
 	}
 	if _, err := (&checkFlags{ignoreFindings: []string{"("}}).ignorer(); err == nil {
 		t.Error("want an error for an invalid regex")
+	}
+}
+
+func TestConfigConditionsBecomeParam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	if err := os.WriteFile(path, []byte("conditions:\n  widgets.example.com: {healthyWhenFalse: [Stalled]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := checkFlags{configs: []string{path}, timeout: time.Second}
+	e, _, err := c.engine(slog.New(slog.DiscardHandler), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range e.Checks() {
+		if d.Name == "conditions" {
+			rules, _ := d.Params["rules"].(map[string]any)
+			if _, ok := rules["widgets.example.com"]; !ok {
+				t.Errorf("rules param: %v", d.Params["rules"])
+			}
+		}
+	}
+	c = checkFlags{configs: []string{path}, params: []string{`conditions.rules={}`}}
+	if _, _, err := c.engine(slog.New(slog.DiscardHandler), nil, nil); err == nil {
+		t.Error("want an error for --check-param conditions.rules together with a config")
 	}
 }

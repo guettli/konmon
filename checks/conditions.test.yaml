@@ -188,3 +188,70 @@ cases:
           - {type: AbleToScale, status: "True"}
           - {type: ScalingLimited, status: "True", reason: TooFewReplicas, message: the desired replica count is less than the minimum replica count}
     expect: []
+
+  - name: taught polarity wins over the built-in tables
+    resource: widgets.example.com
+    params:
+      rules:
+        widgets.example.com:
+          healthyWhenFalse: [Stalled, Synced]
+          ignoreTypes: [LastSyncAttempted]
+    object:
+      metadata: {name: w1, namespace: team-a}
+      status:
+        conditions:
+          - {type: Stalled, status: "False", reason: AllGood}
+          - {type: Synced, status: "True", reason: Weird}
+          - {type: LastSyncAttempted, status: "False", reason: Never}
+    expect:
+      - key: Synced
+        condition: Synced
+        message: 'Condition Synced=True Weird ""'
+        details: {status: "True", reason: Weird, message: ""}
+
+  - name: a taught condition is still reported with its bad status
+    resource: widgets.example.com
+    params:
+      rules:
+        widgets.example.com: {healthyWhenFalse: [Stalled]}
+    object:
+      metadata: {name: w1, namespace: team-a}
+      status:
+        conditions:
+          - {type: Stalled, status: "True", reason: Stuck, message: no progress}
+    expect:
+      - key: Stalled
+        condition: Stalled
+        message: 'Condition Stalled=True Stuck "no progress"'
+        details: {status: "True", reason: Stuck, message: no progress}
+
+  - name: rules for any resource and for the core group
+    resource: pods
+    params:
+      rules:
+        "*": {ignoreTypes: [Flaky]}
+        pods: {healthyWhenFalse: [Custom]}
+    object:
+      metadata: {name: p1, namespace: default}
+      status:
+        conditions:
+          - {type: Flaky, status: "False"}
+          - {type: Custom, status: "False"}
+          - {type: Ready, status: "True"}
+    expect: []
+
+  - name: rules of another group do not apply
+    resource: widgets.other.io
+    params:
+      rules:
+        widgets.example.com: {ignoreTypes: [Broken]}
+    object:
+      metadata: {name: w1, namespace: team-a}
+      status:
+        conditions:
+          - {type: Broken, status: "True", reason: X}
+    expect:
+      - key: Broken
+        condition: Broken
+        message: 'Condition Broken=True X ""'
+        details: {status: "True", reason: X, message: ""}
