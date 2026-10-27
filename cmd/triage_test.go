@@ -221,7 +221,7 @@ func TestTriageBaseline(t *testing.T) {
 	if cfg.Ignored(findings[0], now) == nil || cfg.Ignored(odd, now) == nil || cfg.Ignored(findings[2], now) != nil {
 		t.Errorf("rules: %+v", cfg.Ignore)
 	}
-	other := conditionFinding("a", "w2", "WeirdX", "False", "X") // must not match the quoted glob of odd
+	other := conditionFinding("a", "w2", "Weird*", "False", "X") // the unquoted glob Weird[*] would match it
 	if cfg.Ignored(other, now) != nil {
 		t.Error("glob characters of a key must be quoted")
 	}
@@ -230,5 +230,23 @@ func TestTriageBaseline(t *testing.T) {
 	}
 	if err := s.baseline("2020-01-01"); err == nil {
 		t.Error("want an error for a date in the past")
+	}
+
+	// Nothing new (the real flow drops ignored findings first), and
+	// acknowledged findings are never baselined.
+	out.Reset()
+	s.all = nil
+	if err := s.baseline("90d"); err != nil || !strings.Contains(out.String(), "Baseline: no new findings.") {
+		t.Errorf("no findings: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	f := conditionFinding("b", "w9", "Ready", "False", "Down")
+	s.all = []*checks.Finding{f}
+	s.base = &config.Config{Acknowledged: []*config.IgnoreRule{{Namespace: "b", Comment: "known"}}}
+	if err := s.base.Acknowledged[0].Compile(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.baseline("90d"); err != nil || !strings.Contains(out.String(), "Not baselined: 1 finding") {
+		t.Errorf("acknowledged: %v\n%s", err, out.String())
 	}
 }

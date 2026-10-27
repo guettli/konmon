@@ -96,6 +96,7 @@ func (e *Editor) addRule(list string, r *IgnoreRule) error {
 		return err
 	}
 	seq := value(e.root, list, yaml.SequenceNode)
+	seq.Style = 0 // block style: "ignore: []" would put all rules on one line
 	seq.Content = append(seq.Content, &n)
 	return nil
 }

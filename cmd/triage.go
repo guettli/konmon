@@ -74,6 +74,16 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 	if len(configs) == 0 {
 		return errors.New("--config FILE is required: the answers are written to it (it is created if missing)")
 	}
+	if !triageBaseline && cmd.Flags().Changed("baseline-until") {
+		return errors.New("--baseline-until needs --baseline")
+	}
+	if triageBaseline {
+		date, err := parseUntil(triageBaselineUntil, time.Now())
+		if err != nil {
+			return fmt.Errorf("--baseline-until: %w", err)
+		}
+		triageBaselineUntil = date
+	}
 	target := configs[len(configs)-1]
 	editor, err := config.OpenEditor(target)
 	if err != nil {
@@ -487,7 +497,7 @@ func (t *triageSession) ladder(g *triageGroup) []rung {
 	}
 	add("only "+findingObject(f), config.IgnoreRule{
 		Check: globQuote(f.Check), Resource: globQuote(g.resource), Namespace: globQuote(f.Namespace),
-		Name: globQuote(f.Name), Key: globQuote(f.Key),
+		Name: globQuote(f.Name), Key: globQuote(f.Key), Condition: globQuote(f.Condition), Container: globQuote(f.Container),
 	})
 	if f.Namespace != "" {
 		r := group
@@ -674,7 +684,8 @@ func (t *triageSession) baseline(until string) error {
 		}
 		rule := &config.IgnoreRule{
 			Check: globQuote(f.Check), Resource: globQuote(findingResource(f)), Namespace: globQuote(f.Namespace),
-			Name: globQuote(f.Name), Key: globQuote(f.Key), Until: until, Comment: comment,
+			Name: globQuote(f.Name), Key: globQuote(f.Key), Condition: globQuote(f.Condition), Container: globQuote(f.Container),
+			Until: until, Comment: comment,
 		}
 		if err := t.editor.AddIgnore(rule); err != nil {
 			return fmt.Errorf("%s: %w", f.Line(t.now), err)
@@ -686,11 +697,14 @@ func (t *triageSession) baseline(until string) error {
 			return err
 		}
 	}
-	t.printf("Baseline: added %s to %s", plural(added, "ignore rule"), t.editor.Path())
-	if until != "" {
-		t.printf(", expiring after %s", until)
+	switch {
+	case added == 0:
+		t.printf("Baseline: no new findings.\n")
+	case until != "":
+		t.printf("Baseline: added %s to %s, expiring after %s.\n", plural(added, "ignore rule"), t.editor.Path(), until)
+	default:
+		t.printf("Baseline: added %s to %s.\n", plural(added, "ignore rule"), t.editor.Path())
 	}
-	t.printf(".\n")
 	if skipped > 0 {
 		t.printf("Not baselined: %s (failing checks or acknowledged).\n", plural(skipped, "finding"))
 	}
