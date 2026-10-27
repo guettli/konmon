@@ -305,7 +305,7 @@ func TestWatchAndStore(t *testing.T) {
 	}{
 		{"pods", true, true},
 		{"secrets", false, false},
-		{"configmaps", true, false}, // read by configmap-key-missing only
+		{"configmaps", true, false},                     // read by configmap-key-missing only
 		{"endpointslices.discovery.k8s.io", true, true}, // conditions matches "*"
 		{"cronjobs.batch", true, true},
 		{"events", false, false},
