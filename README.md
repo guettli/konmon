@@ -244,7 +244,7 @@ conditions:
     ignoreTypes:      [LastSyncAttempted]   # informational: both values are fine
 ```
 
-Unlike an ignore rule, a taught condition is still reported when it has its bad status. Taught polarity wins over the built-in tables of `checks/conditions.ts`. If the CRD is public, please [open an issue](https://github.com/guettli/konmon/issues/new) so everybody gets it.
+Unlike an ignore rule, a taught condition is still reported when it has its bad status, or a status other than `True`/`False` (e.g. `Unknown`; use `ignoreTypes` for types whose status is something else, like `Accepted`). The rules of the resource are looked at before `"*"`. Taught polarity wins over the built-in polarity tables of `checks/conditions.ts`; its list of known healthy states (specific reasons) still applies. If you replace `conditions.ts` with your own check, it gets the section as param `rules`. `konmon findings --config` applies only `ignore` rules, not `conditions` (stored findings are not evaluated again). If the CRD is public, please [open an issue](https://github.com/guettli/konmon/issues/new) so everybody gets it.
 
 In a cluster, put the file in a ConfigMap and restart konmon on changes (e.g. with [Reloader](https://github.com/stakater/Reloader)).
 

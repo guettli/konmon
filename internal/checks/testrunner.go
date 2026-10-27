@@ -3,6 +3,7 @@ package checks
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -119,11 +120,10 @@ type testHistory map[string][]HistoryEntry
 func (h testHistory) Conditions(uid string) []HistoryEntry { return h[uid] }
 
 func (e *Engine) runCase(def *Definition, tc *TestCase) error {
+	// Test cases start from the defaults of the source, not from
+	// --check-param or the config file: the tests must not depend on them.
 	d := *def
-	d.Params = make(map[string]any, len(def.Params))
-	for k, v := range def.Params {
-		d.Params[k] = v
-	}
+	d.Params = maps.Clone(def.defaults)
 	for k, v := range tc.Params {
 		if _, ok := d.Params[k]; !ok {
 			return fmt.Errorf("check %s has no param %q", d.Name, k)

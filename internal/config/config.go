@@ -111,7 +111,7 @@ func Parse(data []byte, name string) (*Config, error) {
 	for key, r := range cfg.Conditions {
 		resource := "*"
 		if key != "*" {
-			gr, err := checks.ParseResource(key)
+			gr, err := checks.ParseResource(strings.ToLower(key))
 			if err != nil {
 				return nil, fmt.Errorf("%s: conditions: %w", name, err)
 			}

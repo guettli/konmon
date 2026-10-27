@@ -189,8 +189,11 @@ const ignore: RegExp[] = [
 ];
 
 // Polarity taught by the user (config file, section "conditions"), keyed
-// by "resource.group" (core: "resource") or "*" for any resource. It wins
-// over the built-in tables.
+// by "resource.group" (core: "resource") or "*" for any resource; the rules
+// of the resource are looked at before "*". It wins over the built-in
+// polarity tables; the ignore list and done() below still apply. Other
+// statuses than True and False (Unknown) are reported unless the type is in
+// ignoreTypes.
 interface Rules {
   healthyWhenTrue?: string[];
   healthyWhenFalse?: string[];
@@ -200,11 +203,14 @@ interface Rules {
 // taught returns the healthy status of a condition type, "skip" if both
 // values are fine, or undefined if the user did not teach it.
 function taught(rules: Record<string, Rules>, resource: string, t: string): "True" | "False" | "skip" | undefined {
+  // Arrays only: on a string (a wrong --check-param) includes() would
+  // match substrings.
+  const has = (list: unknown, t: string) => Array.isArray(list) && list.includes(t);
   for (const r of [rules[resource], rules["*"]]) {
     if (r == null) continue;
-    if (r.ignoreTypes?.includes(t)) return "skip";
-    if (r.healthyWhenTrue?.includes(t)) return "True";
-    if (r.healthyWhenFalse?.includes(t)) return "False";
+    if (has(r.ignoreTypes, t)) return "skip";
+    if (has(r.healthyWhenTrue, t)) return "True";
+    if (has(r.healthyWhenFalse, t)) return "False";
   }
   return undefined;
 }

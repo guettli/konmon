@@ -100,6 +100,10 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 	e, err := checks.Load(checks.CoreFiles().Sources, user.Sources, checks.Options{
 		Disabled: c.disabled, Only: only, Categories: categories, Params: params, Timeout: c.timeout, Exclude: exclude, Log: log,
 	})
+	if err != nil && len(cfg.Conditions) > 0 && strings.Contains(err.Error(), `has no param "rules"`) {
+		return nil, nil, fmt.Errorf("%w: the config file has a conditions section, which is passed as param rules; "+
+			"add it to your own conditions check (see 'konmon checks types' and the core checks/conditions.ts)", err)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

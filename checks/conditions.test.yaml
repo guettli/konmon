@@ -255,3 +255,37 @@ cases:
         condition: Broken
         message: 'Condition Broken=True X ""'
         details: {status: "True", reason: X, message: ""}
+
+  - name: taught types are reported with status Unknown, the rule of the resource wins over "*"
+    resource: widgets.example.com
+    params:
+      rules:
+        "*": {healthyWhenTrue: [Stalled]}
+        widgets.example.com: {healthyWhenFalse: [Stalled]}
+    object:
+      metadata: {name: w1, namespace: team-a}
+      status:
+        conditions:
+          - {type: Stalled, status: "False"}
+          - {type: Synced, status: Unknown, reason: Pending}
+    expect:
+      - key: Synced
+        condition: Synced
+        message: 'Condition Synced=Unknown Pending ""'
+        details: {status: Unknown, reason: Pending, message: ""}
+
+  - name: rules which are not lists are ignored
+    resource: widgets.example.com
+    params:
+      rules:
+        widgets.example.com: {ignoreTypes: ReadyX}
+    object:
+      metadata: {name: w1, namespace: team-a}
+      status:
+        conditions:
+          - {type: Ready, status: "False", reason: X}
+    expect:
+      - key: Ready
+        condition: Ready
+        message: 'Condition Ready=False X ""'
+        details: {status: "False", reason: X, message: ""}

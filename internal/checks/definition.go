@@ -3,6 +3,7 @@ package checks
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"sort"
@@ -30,6 +31,8 @@ type Definition struct {
 	For time.Duration
 	// Params are the effective parameters: defaults merged with overrides.
 	Params map[string]any
+	// defaults are the parameters of the source, for test cases.
+	defaults map[string]any
 
 	match, exclude, reads resourceSet
 	program               *goja.Program
@@ -100,6 +103,7 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	if d.Params == nil {
 		d.Params = map[string]any{}
 	}
+	d.defaults = maps.Clone(d.Params)
 	if !nameRE.MatchString(d.Name) || d.Name == ErrorCheck {
 		return nil, fmt.Errorf("%s: invalid check name %q: use lower case letters, digits and dashes", src.Path, d.Name)
 	}

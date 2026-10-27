@@ -150,6 +150,13 @@ conditions:
 	if err != nil {
 		t.Fatal(err)
 	}
+	mixed, err := Parse([]byte("conditions:\n  Widgets.Example.COM: {ignoreTypes: [A]}\n"), "c.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixed.Conditions["widgets.example.com"] == nil {
+		t.Errorf("the group must be lower case: %v", mixed.Conditions)
+	}
 	if cfg.Conditions["widgets.example.com"] == nil || cfg.Conditions["pods"] == nil || cfg.Conditions["*"] == nil {
 		t.Errorf("keys: %v", cfg.Conditions)
 	}
