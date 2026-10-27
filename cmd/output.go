@@ -106,6 +106,14 @@ func (o *findingFilter) countText(health, hygiene int) string {
 	return strings.Join(parts, ", ")
 }
 
+// ignoredText is ", 3 ignored" or "".
+func ignoredText(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d ignored", n)
+}
+
 // plural is "1 check" or "2 checks".
 func plural(n int, what string) string {
 	if n == 1 {

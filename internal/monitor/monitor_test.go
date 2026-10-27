@@ -365,3 +365,45 @@ export default { name: "slow", forSeconds: 300, match: { resources: ["jobs.batch
 		t.Fatalf("must fire after forSeconds: %d", len(n.firing))
 	}
 }
+
+func TestIgnoreRuleStartsAndStopsMatching(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	ignoreUntil := time.Time{}
+	m.cfg.Ignore = func(_ *checks.Finding, now time.Time) string {
+		if now.Before(ignoreUntil) {
+			return "rule"
+		}
+		return ""
+	}
+	eval := func(at time.Duration) {
+		t.Helper()
+		n.firing, n.resolved = nil, nil
+		if err := m.Evaluate(ctx, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eval(0)
+	eval(time.Minute)
+	if len(n.firing) != 1 {
+		t.Fatalf("want 1 firing, got %d", len(n.firing))
+	}
+	// A rule starts to match: the alert is resolved.
+	ignoreUntil = t0.Add(5 * time.Minute)
+	eval(2 * time.Minute)
+	if len(n.firing) != 0 || len(n.resolved) != 1 {
+		t.Fatalf("ignored finding: firing %d, resolved %d", len(n.firing), len(n.resolved))
+	}
+	// The rule expires: the finding opens again and fires only after For.
+	eval(5 * time.Minute)
+	if len(n.firing) != 0 {
+		t.Errorf("must not fire before For after the rule expired, got %d", len(n.firing))
+	}
+	eval(6 * time.Minute)
+	if len(n.firing) != 1 {
+		t.Errorf("want firing again after For, got %d", len(n.firing))
+	}
+}

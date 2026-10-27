@@ -143,10 +143,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ignore, err := runOpts.checks.ignoreRegexps()
+	ignore, err := runOpts.checks.ignorer()
 	if err != nil {
 		return err
 	}
+	ignore.warnExpired(log, time.Now())
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)
@@ -159,6 +160,19 @@ func run(ctx context.Context) error {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		// A rule may expire while konmon runs.
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				ignore.warnExpired(log, now)
+			}
+		}
+	}()
 
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {
@@ -191,7 +205,7 @@ func run(ctx context.Context) error {
 	}
 	mon := monitor.New(monitor.Config{
 		Checks:            engine,
-		IgnoreFindings:    ignore,
+		Ignore:            ignore.ignored,
 		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,

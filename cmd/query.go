@@ -11,12 +11,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/guettli/konmon/internal/config"
 	"github.com/guettli/konmon/internal/store"
 )
 
 var (
-	findingsAt     string
-	findingsFilter findingFilter
+	findingsAt      string
+	findingsFilter  findingFilter
+	findingsConfigs []string
 )
 
 var findingsCmd = &cobra.Command{
@@ -52,32 +54,46 @@ Examples:
 		if err != nil {
 			return err
 		}
-		return printFindings(cmd.OutOrStdout(), rows, at, &findingsFilter)
+		cfg, err := config.Load(findingsConfigs)
+		if err != nil {
+			return err
+		}
+		return printFindings(cmd.OutOrStdout(), rows, at, &findingsFilter, cfg)
 	},
 }
 
-func printFindings(w io.Writer, rows []store.FindingRow, at time.Time, filter *findingFilter) error {
+// printFindings prints stored findings. cfg drops findings like 'konmon
+// run' would with this config (to try new rules on the stored findings).
+func printFindings(w io.Writer, rows []store.FindingRow, at time.Time, filter *findingFilter, cfg *config.Config) error {
+	var kept []store.FindingRow
+	ignored := 0
+	for i := range rows {
+		switch {
+		case !filter.match(&rows[i].Finding):
+		case cfg.Ignored(&rows[i].Finding, at) != nil:
+			ignored++
+		default:
+			kept = append(kept, rows[i])
+		}
+	}
+	rows = kept
 	if filter.output == "json" {
-		result := findingsResult{At: at.UTC().Truncate(time.Millisecond), Findings: []jsonFinding{}}
+		result := findingsResult{At: at.UTC().Truncate(time.Millisecond), Findings: []jsonFinding{}, Ignored: ignored}
 		for i := range rows {
-			if filter.match(&rows[i].Finding) {
-				j := toJSONFinding(&rows[i].Finding)
-				j.FirstSeen = rows[i].FirstSeen
-				result.Findings = append(result.Findings, j)
-			}
+			j := toJSONFinding(&rows[i].Finding)
+			j.FirstSeen = rows[i].FirstSeen
+			result.Findings = append(result.Findings, j)
 		}
 		sortJSONFindings(result.Findings)
 		return writeJSON(w, result)
 	}
-	var shown []shownFinding
+	shown := make([]shownFinding, 0, len(rows))
 	for i := range rows {
 		f := &rows[i].Finding
-		if filter.match(f) {
-			shown = append(shown, shownFinding{f, fmt.Sprintf("%s  [since %s]", f.Line(at), formatTime(rows[i].FirstSeen))})
-		}
+		shown = append(shown, shownFinding{f, fmt.Sprintf("%s  [since %s]", f.Line(at), formatTime(rows[i].FirstSeen))})
 	}
 	health, hygiene := printFindingLines(w, shown)
-	_, _ = fmt.Fprintf(w, "%s open at %s\n", filter.countText(health, hygiene), formatTime(at))
+	_, _ = fmt.Fprintf(w, "%s%s open at %s\n", filter.countText(health, hygiene), ignoredText(ignored), formatTime(at))
 	return nil
 }
 
@@ -85,6 +101,8 @@ func printFindings(w io.Writer, rows []store.FindingRow, at time.Time, filter *f
 type findingsResult struct {
 	At       time.Time     `json:"at"`
 	Findings []jsonFinding `json:"findings"`
+	// Ignored is the number of findings dropped by --config.
+	Ignored int `json:"ignored"`
 }
 
 var (
@@ -202,6 +220,7 @@ var versionCmd = &cobra.Command{
 func init() {
 	findingsCmd.Flags().StringVar(&findingsAt, "at", "", "Point in time: a duration ago (2h) or an RFC3339 timestamp. Default: now.")
 	findingsFilter.register(findingsCmd.Flags())
+	findingsCmd.Flags().StringArrayVar(&findingsConfigs, "config", nil, "Config file with ignore rules: hide the findings they match, to try rules before deploying them. Can be given multiple times.")
 	historyCmd.Flags().StringVarP(&historyNamespace, "namespace", "n", "", "Namespace of the object. Default: all namespaces.")
 	historyCmd.Flags().StringVar(&historySince, "since", "", "Only show changes after this time: a duration ago (24h) or an RFC3339 timestamp. Default: everything.")
 	rootCmd.AddCommand(findingsCmd, historyCmd, versionCmd)

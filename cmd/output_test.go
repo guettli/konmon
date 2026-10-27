@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -139,9 +140,39 @@ func TestFindingsCommand(t *testing.T) {
 		t.Errorf("unexpected JSON: %+v", result)
 	}
 
+	cfgPath := filepath.Join(t.TempDir(), "konmon.yaml")
+	if err := os.WriteFile(cfgPath, []byte("ignore:\n  - namespace: app-b\n    comment: test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	findingsConfigs = nil
+	text = runFindings("--at", t0.Add(time.Minute).Format(time.RFC3339), "--config", cfgPath)
+	if strings.Contains(text, "app-b") || !strings.Contains(text, "1 health finding, 1 hygiene finding, 1 ignored open at") {
+		t.Errorf("--config should hide app-b:\n%s", text)
+	}
+	findingsConfigs = nil
+
 	findingsFilter = findingFilter{output: "text"}
 	rootCmd.SetArgs([]string{"findings", "--db", filepath.Join(t.TempDir(), "typo.db")})
 	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "no konmon database") {
 		t.Errorf("want an error for a missing database, got %v", err)
+	}
+}
+
+func TestIgnorer(t *testing.T) {
+	c := checkFlags{ignoreFindings: []string{"broken"}}
+	ig, err := c.ignorer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := testFinding("conditions", checks.CategoryHealth, "a", "x")
+	if ig.ignored(&f, time.Now()) == "" {
+		t.Error("the regex should match")
+	}
+	checkError := checks.Finding{Check: checks.ErrorCheck, Message: "check broken failed"}
+	if ig.ignored(&checkError, time.Now()) != "" {
+		t.Error("a regex must never hide a failing check")
+	}
+	if _, err := (&checkFlags{ignoreFindings: []string{"("}}).ignorer(); err == nil {
+		t.Error("want an error for an invalid regex")
 	}
 }

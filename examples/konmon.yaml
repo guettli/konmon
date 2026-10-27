@@ -1,0 +1,23 @@
+# Example config file for konmon: konmon check --config examples/konmon.yaml
+#
+# An ignore rule drops the findings it matches. All fields which are set must
+# match: check, resource (resource.group), namespace, name, condition,
+# container and key are glob patterns, message is a regular expression
+# (search, not full match). comment is required, until (YYYY-MM-DD, last day,
+# UTC) is optional: after that day the rule does not match any more and
+# konmon warns.
+#
+# Quote globs which start with "*" (YAML anchors). A namespace pattern never
+# matches cluster-scoped objects. A failing check (check-error) is only hidden
+# by a rule with check: check-error and key: <name of the failing check>.
+ignore:
+  - check: conditions
+    resource: widgets.example.com
+    condition: Stalled
+    message: "Waiting for upstream"
+    comment: Stalled=True while waiting for upstream is normal during a sync.
+    until: 2099-12-31
+
+  - check: container-resources-missing
+    namespace: liqo*
+    comment: The liqo chart has no way to set resources.

@@ -204,13 +204,35 @@ cases:
 | `--checks` | none | directory with own checks, repeatable |
 | `--disable-check` | none | check names, globs |
 | `--check-param` | none | `check.param=value`, repeatable |
-| `--ignore-finding-regex` | none | drop findings; matched against `check resource namespace/name message` |
+| `--config` | none | config file with ignore rules (below), repeatable |
+| `--ignore-finding-regex` | none | drop findings; matched against `check resource namespace/name message`. Prefer `--config` |
 | `--alertmanager-url` | none | repeatable; without it konmon only records |
 | `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
 | `--cluster-name` | none | `cluster` label on all alerts |
 | `--listen` | `:8080` | `/healthz` |
 
 Parameters of the core checks: `conditions.podStartGraceSeconds` (30), `deletion-timestamp.olderThanSeconds` (600), `pod-container-restarts.restarts` (5) and `pvc-not-bound.pendingGraceSeconds` (300). `konmon checks list` shows all checks.
+
+### Ignoring findings: the config file
+
+A finding which is fine (a false positive, or something you accept) is dropped by an ignore rule in a config file, `--config konmon.yaml` (for `run`, `check` and `findings`; repeatable, the rules are merged):
+
+```yaml
+ignore:
+  - check: conditions
+    resource: widgets.example.com   # resource.group
+    namespace: team-*
+    condition: Stalled
+    message: "Waiting for upstream" # regular expression
+    comment: Stalled=True while waiting for upstream is normal.   # required
+    until: 2027-01-31               # optional, last day (UTC); then konmon warns and reports again
+```
+
+All fields which are set must match; `check`, `resource`, `namespace`, `name`, `condition`, `container` and `key` are globs (quote a glob which starts with `*`: `name: "*-test"`). A `namespace` pattern never matches cluster-scoped objects. Unknown fields, a second YAML document (`---`) and a rule which matches everything are errors, so a typo never ignores everything or nothing. A failing check (`check-error`) is only hidden by a rule with `check: check-error` and `key: <name of the failing check>`. `konmon check` says how many findings were ignored; `konmon run` logs `finding ignored` with the rule.
+
+`konmon findings --config new.yaml` applies the rules to the findings a running konmon stored, to try a stricter config before deploying it (findings which the running config already ignores are not stored). See [examples/konmon.yaml](examples/konmon.yaml).
+
+In a cluster, put the file in a ConfigMap and restart konmon on changes (e.g. with [Reloader](https://github.com/stakater/Reloader)).
 
 ### Alerts
 

@@ -17,10 +17,12 @@ import (
 
 	core "github.com/guettli/konmon/checks"
 	"github.com/guettli/konmon/internal/checks"
+	"github.com/guettli/konmon/internal/config"
 )
 
 // checkFlags are shared by `run` and `check`.
 type checkFlags struct {
+	configs           []string
 	dirs              []string
 	disabled          []string
 	params            []string
@@ -31,6 +33,7 @@ type checkFlags struct {
 }
 
 func (c *checkFlags) register(f *pflag.FlagSet) {
+	f.StringArrayVar(&c.configs, "config", nil, "Config file with ignore rules (YAML, see README). Can be given multiple times: the rules are merged.")
 	f.StringArrayVar(&c.dirs, "checks", nil, "Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.")
 	f.StringSliceVar(&c.disabled, "disable-check", nil, "Checks to disable, by name. Comma-separated, glob patterns allowed.")
 	f.StringArrayVar(&c.params, "check-param", nil, "Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.")
@@ -83,16 +86,59 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 	return e, user, nil
 }
 
-func (c *checkFlags) ignoreRegexps() ([]*regexp.Regexp, error) {
-	result := make([]*regexp.Regexp, 0, len(c.ignoreFindings))
+// ignorer combines the rules of --config and --ignore-finding-regex. It
+// returns nil if there are none.
+func (c *checkFlags) ignorer() (*ignorer, error) {
+	cfg, err := config.Load(c.configs)
+	if err != nil {
+		return nil, err
+	}
+	ig := &ignorer{config: cfg}
 	for _, s := range c.ignoreFindings {
 		r, err := regexp.Compile(s)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --ignore-finding-regex %q: %w", s, err)
 		}
-		result = append(result, r)
+		ig.regexps = append(ig.regexps, r)
 	}
-	return result, nil
+	return ig, nil
+}
+
+// ignorer drops findings: rules of config files and --ignore-finding-regex.
+type ignorer struct {
+	config  *config.Config
+	regexps []*regexp.Regexp
+	warned  map[*config.IgnoreRule]bool // expired rules which were logged
+}
+
+// ignored returns the rule which drops the finding, or "".
+func (ig *ignorer) ignored(f *checks.Finding, now time.Time) string {
+	if r := ig.config.Ignored(f, now); r != nil {
+		return r.Source
+	}
+	if f.Check == checks.ErrorCheck {
+		return "" // a failing check is never hidden by a regex
+	}
+	for _, re := range ig.regexps {
+		if re.MatchString(f.Subject()) {
+			return "--ignore-finding-regex " + re.String()
+		}
+	}
+	return ""
+}
+
+// warnExpired logs the rules which do not match any more, each once.
+func (ig *ignorer) warnExpired(log *slog.Logger, now time.Time) {
+	if ig.warned == nil {
+		ig.warned = map[*config.IgnoreRule]bool{}
+	}
+	for _, r := range ig.config.Expired(now) {
+		if ig.warned[r] {
+			continue
+		}
+		ig.warned[r] = true
+		log.Warn("ignore rule expired, findings it matched are reported again", "rule", r.Source, "until", r.Until, "comment", r.Comment)
+	}
 }
 
 var checksFlags checkFlags
