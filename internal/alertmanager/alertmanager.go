@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
-
 	"github.com/guettli/konmon/internal/store"
 )
 
@@ -98,26 +96,31 @@ func (c *Client) labels() map[string]string {
 func (c *Client) alert(r *store.FindingRow, now, endsAt time.Time) Alert {
 	f := &r.Finding
 	labels := c.labels()
-	labels["alertname"] = "Konmon" + string(f.Kind)
-	labels["severity"] = "warning"
+	labels["alertname"] = "KonmonFinding"
+	labels["check"] = f.Check
+	labels["severity"] = f.Severity
+	labels["category"] = f.Category
 	setIfNotEmpty(labels, "group", f.GVR.Group)
 	setIfNotEmpty(labels, "resource", f.GVR.Resource)
 	setIfNotEmpty(labels, "namespace", f.Namespace)
 	setIfNotEmpty(labels, "name", f.Name)
-	if f.Kind == checkconditions.FindingCondition {
-		setIfNotEmpty(labels, "condition", strings.Join(f.ConditionTypes, "/"))
-	}
+	setIfNotEmpty(labels, "condition", f.Condition)
 	setIfNotEmpty(labels, "container", f.Container)
-
-	annotations := map[string]string{
-		"summary": strings.TrimSpace(f.Line(now)),
+	// A check may report several findings per object; the key keeps their
+	// alerts apart when no other label does.
+	if f.Condition == "" && f.Container == "" {
+		setIfNotEmpty(labels, "key", f.Key)
 	}
-	setIfNotEmpty(annotations, "status", f.Status)
-	setIfNotEmpty(annotations, "reason", f.Reason)
-	setIfNotEmpty(annotations, "message", f.Message)
-	setIfNotEmpty(annotations, "detail", f.Detail)
-	if !f.LastTransitionTime.IsZero() {
-		annotations["lastTransitionTime"] = f.LastTransitionTime.UTC().Format(time.RFC3339)
+
+	// Details become annotations (for the conditions check: status, reason
+	// and the condition's message). The summary holds the whole line.
+	annotations := make(map[string]string, len(f.Details)+2)
+	for k, v := range f.Details {
+		annotations[k] = v
+	}
+	annotations["summary"] = strings.TrimSpace(f.Line(now))
+	if !f.Since.IsZero() {
+		annotations["since"] = f.Since.UTC().Format(time.RFC3339)
 	}
 	return Alert{
 		Labels:       labels,

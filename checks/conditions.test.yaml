@@ -1,0 +1,147 @@
+check: conditions
+cases:
+  - name: healthy deployment
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      status:
+        conditions:
+          - {type: Available, status: "True", reason: MinimumReplicasAvailable}
+          - {type: Progressing, status: "True", reason: NewReplicaSetAvailable}
+    expect: []
+
+  - name: unavailable deployment with replica detail
+    resource: deployments.apps
+    now: 2026-01-01T00:10:00Z
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {replicas: 3}
+      status:
+        availableReplicas: 1
+        conditions:
+          - type: Available
+            status: "False"
+            reason: MinimumReplicasUnavailable
+            message: Deployment does not have minimum availability.
+            lastTransitionTime: "2026-01-01T00:00:00Z"
+    expect:
+      - key: Available
+        condition: Available
+        message: 'Condition Available=False MinimumReplicasUnavailable "Deployment does not have minimum availability." available 1/3'
+        since: "2026-01-01T00:00:00Z"
+        details: {status: "False", reason: MinimumReplicasUnavailable, message: Deployment does not have minimum availability.}
+
+  - name: negative polarity node conditions
+    resource: nodes
+    object:
+      metadata: {name: n1}
+      status:
+        conditions:
+          - {type: MemoryPressure, status: "False"}
+          - {type: KernelDeadlock, status: "False"}
+          - {type: Ready, status: "True"}
+          - {type: DiskPressure, status: "True", reason: KubeletHasDiskPressure}
+    expect:
+      - {condition: DiskPressure, message: 'Condition DiskPressure=True KubeletHasDiskPressure ""'}
+
+  - name: unknown condition type is reported when not True
+    resource: widgets.example.com
+    object:
+      metadata: {name: w, namespace: x}
+      status:
+        conditions:
+          - {type: Frobnicated, status: "False", reason: Nope}
+    expect:
+      - {condition: Frobnicated}
+
+  - name: merged conditions with the same reason and message
+    resource: jobs.batch
+    object:
+      metadata: {name: j, namespace: default}
+      status:
+        conditions:
+          - {type: FailureTarget, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit, lastTransitionTime: "2025-12-31T23:00:00Z"}
+          - {type: Failed, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit, lastTransitionTime: "2025-12-31T23:30:00Z"}
+    expect:
+      - key: Failed/FailureTarget
+        condition: Failed/FailureTarget
+        since: "2025-12-31T23:00:00Z"
+
+  - name: Ready summary is dropped when another condition says the same
+    resource: machines.cluster.x-k8s.io
+    object:
+      metadata: {name: m, namespace: default}
+      status:
+        conditions:
+          - {type: Ready, status: "False", reason: WaitingForInfrastructure, message: "0 of 2 completed"}
+          - {type: InfrastructureReady, status: "False", reason: WaitingForInfrastructure, message: "0 of 2 completed"}
+    expect:
+      - {condition: InfrastructureReady}
+
+  - name: starting pod within grace period
+    resource: pods
+    now: 2026-01-01T00:00:10Z
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses: [{name: app, restartCount: 0}]
+        conditions:
+          - {type: ContainersReady, status: "False", reason: ContainersNotReady, lastTransitionTime: "2026-01-01T00:00:00Z"}
+          - {type: Initialized, status: "True"}
+    expect: []
+
+  - name: starting pod after the grace period
+    resource: pods
+    now: 2026-01-01T00:01:00Z
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses: [{name: app, restartCount: 0}]
+        conditions:
+          - {type: ContainersReady, status: "False", reason: ContainersNotReady, lastTransitionTime: "2026-01-01T00:00:00Z"}
+    expect:
+      - {condition: ContainersReady, since: "2026-01-01T00:00:00Z"}
+
+  - name: completed pod is done
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        conditions:
+          - {type: Ready, status: "False", reason: PodCompleted}
+          - {type: ContainersReady, status: "False", reason: PodCompleted}
+          - {type: PodReadyToStartContainers, status: "False"}
+    expect: []
+
+  - name: built-in ignore regex
+    resource: backuptargets.longhorn.io
+    object:
+      metadata: {name: default, namespace: longhorn-system}
+      status:
+        conditions:
+          - {type: Unavailable, status: "True", reason: Unavailable, message: backup target URL is empty}
+    expect: []
+
+  - name: hetznerbaremetalhosts read spec.status
+    resource: hetznerbaremetalhosts.infrastructure.cluster.x-k8s.io
+    object:
+      metadata: {name: h, namespace: default}
+      spec:
+        status:
+          conditions:
+            - {type: RootDeviceHintsValidated, status: "True"}
+            - {type: Provisioned, status: "False", reason: Failed}
+    expect:
+      - {condition: Provisioned}
+
+  - name: grace period param 0 disables it
+    resource: pods
+    now: 2026-01-01T00:00:10Z
+    params: {podStartGraceSeconds: 0}
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        conditions:
+          - {type: ContainersReady, status: "False", lastTransitionTime: "2026-01-01T00:00:00Z"}
+    expect:
+      - {condition: ContainersReady}

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/store"
 )
 
@@ -27,11 +28,12 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 	defer srv.Close()
 
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	f := checkconditions.Finding{
-		Kind:      checkconditions.FindingCondition,
+	f := checks.Finding{
+		Check: "conditions", Category: checks.CategoryHealth, Severity: "warning",
 		GVR:       schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
-		Namespace: "ns", Name: "web", ConditionTypes: []string{"Available"},
-		Status: "False", Reason: "MinimumReplicasUnavailable",
+		Namespace: "ns", Name: "web", Key: "Available", Condition: "Available",
+		Message: `Condition Available=False MinimumReplicasUnavailable ""`,
+		Details: map[string]string{"reason": "MinimumReplicasUnavailable"},
 	}
 	firing := []store.FindingRow{{Finding: f, FirstSeen: now.Add(-5 * time.Minute)}}
 	resolved := []store.FindingRow{{Finding: f, FirstSeen: now.Add(-time.Hour), ResolvedAt: now.Add(-time.Minute)}}
@@ -50,7 +52,7 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 	}
 	a := got[0]
 	want := map[string]string{
-		"alertname": "KonmonCondition", "severity": "warning", "cluster": "prod",
+		"alertname": "KonmonFinding", "check": "conditions", "severity": "warning", "category": "health", "cluster": "prod",
 		"group": "apps", "resource": "deployments", "namespace": "ns", "name": "web", "condition": "Available",
 	}
 	for k, v := range want {
@@ -61,7 +63,10 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 	if !a.EndsAt.Equal(now.Add(2 * time.Minute)) {
 		t.Errorf("firing endsAt = %s", a.EndsAt)
 	}
-	if a.Annotations["reason"] != "MinimumReplicasUnavailable" {
+	if _, ok := a.Labels["key"]; ok {
+		t.Error("key label is only set when condition and container are empty")
+	}
+	if a.Annotations["reason"] != "MinimumReplicasUnavailable" || !strings.HasPrefix(a.Annotations["summary"], "ns deployments web Condition") {
 		t.Errorf("annotations = %v", a.Annotations)
 	}
 	if !got[1].EndsAt.Equal(now.Add(-time.Minute)) {

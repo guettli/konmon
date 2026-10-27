@@ -1,0 +1,89 @@
+[
+  {"gvr": {"Group": "apps", "Version": "v1", "Resource": "deployments"}, "object": {
+    "metadata": {"name": "web", "namespace": "default", "uid": "d1"},
+    "spec": {"replicas": 3},
+    "status": {"availableReplicas": 1, "conditions": [
+      {"type": "Available", "status": "False", "reason": "MinimumReplicasUnavailable", "message": "Deployment does not have minimum availability.", "lastTransitionTime": "2026-01-01T00:00:00Z"},
+      {"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"}
+    ]}}},
+  {"gvr": {"Group": "", "Version": "v1", "Resource": "pods"}, "object": {
+    "metadata": {"name": "crash", "namespace": "default", "uid": "p1", "deletionTimestamp": "2026-01-01T00:00:00Z"},
+    "status": {
+      "containerStatuses": [
+        {"name": "app", "restartCount": 12, "ready": false, "state": {"waiting": {"reason": "CrashLoopBackOff"}}},
+        {"name": "ok", "restartCount": 12, "ready": true, "state": {"running": {}}}
+      ],
+      "initContainerStatuses": [{"name": "init", "restartCount": 6, "ready": false, "state": {"waiting": {}}}],
+      "conditions": [
+        {"type": "Ready", "status": "False", "reason": "ContainersNotReady", "message": "containers with unready status: [app]", "lastTransitionTime": "2026-01-01T00:59:50Z"},
+        {"type": "ContainersReady", "status": "False", "reason": "ContainersNotReady", "message": "containers with unready status: [app]", "lastTransitionTime": "2026-01-01T00:59:55Z"},
+        {"type": "PodReadyToStartContainers", "status": "False"}
+      ]}}},
+  {"gvr": {"Group": "", "Version": "v1", "Resource": "pods"}, "object": {
+    "metadata": {"name": "starting", "namespace": "default", "uid": "p2"},
+    "status": {
+      "containerStatuses": [{"name": "app", "restartCount": 0}],
+      "conditions": [
+        {"type": "ContainersReady", "status": "False", "reason": "ContainersNotReady", "lastTransitionTime": "2026-01-01T00:59:45Z"},
+        {"type": "Initialized", "status": "False", "lastTransitionTime": "2026-01-01T00:59:45Z"},
+        {"type": "Ready", "status": "False", "reason": "ContainersNotReady", "lastTransitionTime": "2026-01-01T00:59:45Z"}
+      ]}}},
+  {"gvr": {"Group": "", "Version": "v1", "Resource": "nodes"}, "object": {
+    "metadata": {"name": "n1", "uid": "n1"},
+    "status": {"conditions": [
+      {"type": "MemoryPressure", "status": "False"},
+      {"type": "DiskPressure", "status": "Unknown", "reason": "NodeStatusUnknown", "message": "Kubelet stopped posting node status."},
+      {"type": "Ready", "status": "Unknown", "reason": "NodeStatusUnknown", "message": "Kubelet stopped posting node status."},
+      {"type": "FrequentKubeletRestart", "status": "False"},
+      {"type": "KernelDeadlock", "status": "True", "reason": "AUFSUmountHung", "message": "task \"umount\" blocked — ünïcode"}
+    ]}}},
+  {"gvr": {"Group": "batch", "Version": "v1", "Resource": "jobs"}, "object": {
+    "metadata": {"name": "j", "namespace": "default", "uid": "j1"},
+    "status": {"conditions": [
+      {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded", "message": "Job has reached the specified backoff limit", "lastTransitionTime": "2026-01-01T00:30:00Z"},
+      {"type": "FailureTarget", "status": "True", "reason": "BackoffLimitExceeded", "message": "Job has reached the specified backoff limit", "lastTransitionTime": "2026-01-01T00:20:00Z"}
+    ]}}},
+  {"gvr": {"Group": "cluster.x-k8s.io", "Version": "v1beta1", "Resource": "machinesets"}, "object": {
+    "metadata": {"name": "ms", "namespace": "default", "uid": "ms1"},
+    "status": {"conditions": [
+      {"type": "MachinesReady", "status": "False", "reason": "Deleted @ Machine/foo", "message": ""},
+      {"type": "Ready", "status": "False", "reason": "NodeNotFound @ Machine/bar"},
+      {"type": "ScalingUp", "status": "False"}
+    ]}}},
+  {"gvr": {"Group": "cluster.x-k8s.io", "Version": "v1beta1", "Resource": "machines"}, "object": {
+    "metadata": {"name": "m", "namespace": "default", "uid": "m1"},
+    "status": {"conditions": [
+      {"type": "Ready", "status": "False", "reason": "WaitingForInfrastructure", "message": "0 of 2 completed"},
+      {"type": "InfrastructureReady", "status": "False", "reason": "WaitingForInfrastructure", "message": "0 of 2 completed"},
+      {"type": "Updating", "status": "False"}
+    ]}}},
+  {"gvr": {"Group": "longhorn.io", "Version": "v1beta2", "Resource": "backuptargets"}, "object": {
+    "metadata": {"name": "default", "namespace": "longhorn-system", "uid": "b1"},
+    "status": {"conditions": [{"type": "Unavailable", "status": "True", "reason": "Unavailable", "message": "backup target URL is empty"}]}}},
+  {"gvr": {"Group": "offloading.liqo.io", "Version": "v1beta1", "Resource": "virtualnodes"}, "object": {
+    "metadata": {"name": "v", "namespace": "liqo", "uid": "v1"},
+    "status": {"conditions": [
+      {"type": "Node", "status": "Running", "reason": "x"},
+      {"type": "VirtualKubelet", "status": "Creating", "reason": "x"}
+    ]}}},
+  {"gvr": {"Group": "infrastructure.cluster.x-k8s.io", "Version": "v1beta1", "Resource": "hetznerbaremetalhosts"}, "object": {
+    "metadata": {"name": "h", "namespace": "default", "uid": "h1"},
+    "spec": {"status": {"conditions": [
+      {"type": "RootDeviceHintsValidated", "status": "True"},
+      {"type": "ProvisionSucceeded", "status": "False", "reason": "Failed", "message": "x"}
+    ]}}}},
+  {"gvr": {"Group": "example.com", "Version": "v1", "Resource": "widgets"}, "object": {
+    "metadata": {"name": "w", "namespace": "default", "uid": "w1"},
+    "status": {"conditions": [
+      {"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "cannot \"connect\"\n\ttab", "lastTransitionTime": "2026-01-01T00:00:00.5Z"},
+      {"type": "Error", "status": "False"},
+      {"type": "Paused", "status": "True"},
+      {"type": "Connected", "status": "True"},
+      {"type": "CreatedSomething", "status": "True"},
+      {"status": "False"},
+      "not an object"
+    ]}}},
+  {"gvr": {"Group": "example.com", "Version": "v1", "Resource": "gadgets"}, "object": {
+    "metadata": {"name": "g", "namespace": "default", "uid": "g1"},
+    "status": {"conditions": {"type": "Ready"}}}}
+]

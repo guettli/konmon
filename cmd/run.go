@@ -7,17 +7,16 @@ import (
 	"net/http"
 	"os/signal"
 	"path"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
@@ -30,8 +29,8 @@ import (
 var runOpts struct {
 	kubeContext          string
 	clusterName          string
-	excludeNamespaces    []string
-	excludeResources     []string
+	checks               checkFlags
+	historyWindow        time.Duration
 	revisions            bool
 	noRevisionsFor       []string
 	forDuration          time.Duration
@@ -42,17 +41,15 @@ var runOpts struct {
 	alertmanagerURLs     []string
 	alertmanagerWatchdog bool
 	resendResolved       time.Duration
-	ignoreRegexs         []string
-	args                 checkconditions.Arguments
 }
 
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Watch the cluster, record history and send alerts",
 	Long: `Watch all resource types of the cluster and store every change in the
-SQLite database. Every --eval-interval all objects are checked with the
-check-conditions rules. A finding which is open for at least --for fires and
-is sent to Alertmanager (if --alertmanager-url is given).
+SQLite database. Every --eval-interval all checks run on all objects. A
+health finding which is open for at least --for fires and is sent to
+Alertmanager (if --alertmanager-url is given).
 
 The kubeconfig is found like kubectl does (KUBECONFIG, ~/.kube/config), or
 in-cluster config is used when running in a Pod.`,
@@ -66,9 +63,8 @@ func init() {
 	f := runCmd.Flags()
 	f.StringVar(&runOpts.kubeContext, "context", "", "Kubeconfig context to use. Default: current context.")
 	f.StringVar(&runOpts.clusterName, "cluster-name", "", "Value of the 'cluster' label of alerts. Empty: no label.")
-	f.StringSliceVar(&runOpts.excludeNamespaces, "exclude-namespace", nil, "Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.")
-	f.StringSliceVar(&runOpts.excludeResources, "exclude-resource", []string{"leases.coordination.k8s.io", "endpointslices.discovery.k8s.io", "events.events.k8s.io"},
-		"Resource types to not watch, as resource.group (core: resource). Comma-separated, glob patterns allowed. Types without conditions like secrets, configmaps and events are never watched.")
+	runOpts.checks.register(f)
+	f.DurationVar(&runOpts.historyWindow, "history-window", 24*time.Hour, "How much condition history checks which use ctx.history can see.")
 	f.BoolVar(&runOpts.revisions, "revisions", true, "Store a compressed copy of every changed object, not only the latest version.")
 	f.StringSliceVar(&runOpts.noRevisionsFor, "no-revisions-for", nil, "Resource types (resource.group, globs allowed) to store without revisions.")
 	f.DurationVar(&runOpts.forDuration, "for", 2*time.Minute, "How long a finding must be open before it fires.")
@@ -80,11 +76,6 @@ func init() {
 	f.BoolVar(&runOpts.alertmanagerWatchdog, "alertmanager-watchdog", false, "Send an always-firing KonmonWatchdog alert, for a dead man's switch.")
 	f.DurationVar(&runOpts.resendResolved, "resend-resolved", 15*time.Minute, "How long resolved alerts are re-sent to Alertmanager.")
 
-	// The check-conditions rules, same flags and defaults as check-conditions.
-	f.DurationVar(&runOpts.args.WarnDeletionTimestampOlderThan, "warn-deletion-older-than", 10*time.Minute, "Warn about resources whose deletionTimestamp is older than this duration. Set to 0 to disable.")
-	f.DurationVar(&runOpts.args.PodStartGracePeriod, "pod-start-grace", 30*time.Second, "Treat a Pod whose ContainersReady/Initialized condition is False as healthy while it is still starting for the first time and younger than this duration. Set to 0 to disable.")
-	f.Int64Var(&runOpts.args.PodRestartWarnCount, "pod-restart-warn-count", 5, "Warn about a Pod container that has restarted at least this many times and is still unhealthy. Set to 0 to disable.")
-	f.StringArrayVar(&runOpts.ignoreRegexs, "ignore-condition-regex", nil, "Additional regex to ignore a condition line, on top of the built-in list of check-conditions. Can be given multiple times. Matched against: 'resource type=status reason \"message\"'.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -105,6 +96,28 @@ func globMatcher(patterns []string) (func(schema.GroupResource) bool, error) {
 	}, nil
 }
 
+// clients builds the Kubernetes clients for a kubeconfig context.
+func clients(kubeContext string) (*rest.Config, dynamic.Interface, discovery.DiscoveryInterface, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: kubeContext}
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("kubeconfig: %w", err)
+	}
+	config.QPS = 50
+	config.Burst = 100
+	config.UserAgent = "konmon/" + buildVersion()
+	dyn, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	disc, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return config, dyn, disc, nil
+}
+
 func run(ctx context.Context) error {
 	log, err := newLogger()
 	if err != nil {
@@ -113,40 +126,20 @@ func run(ctx context.Context) error {
 	// client-go logs reflector errors with klog; send them to our logger.
 	klog.SetSlogLogger(log)
 
-	args := runOpts.args
-	for _, s := range runOpts.ignoreRegexs {
-		r, err := regexp.Compile(s)
-		if err != nil {
-			return fmt.Errorf("invalid --ignore-condition-regex %q: %w", s, err)
-		}
-		args.ExtraConditionLinesToIgnoreRegexs = append(args.ExtraConditionLinesToIgnoreRegexs, r)
-	}
-	if _, err := globMatcher(runOpts.excludeNamespaces); err != nil {
-		return fmt.Errorf("--exclude-namespace: %w", err)
-	}
-	excludeResource, err := globMatcher(runOpts.excludeResources)
+	engine, _, err := runOpts.checks.engine(log)
 	if err != nil {
-		return fmt.Errorf("--exclude-resource: %w", err)
+		return err
+	}
+	ignore, err := runOpts.checks.ignoreRegexps()
+	if err != nil {
+		return err
 	}
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)
 	}
 
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: runOpts.kubeContext}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
-	if err != nil {
-		return fmt.Errorf("kubeconfig: %w", err)
-	}
-	config.QPS = 50
-	config.Burst = 100
-	config.UserAgent = "konmon/" + buildVersion()
-	dyn, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return err
-	}
-	disc, err := discovery.NewDiscoveryClientForConfig(config)
+	config, dyn, disc, err := clients(runOpts.kubeContext)
 	if err != nil {
 		return err
 	}
@@ -164,11 +157,9 @@ func run(ctx context.Context) error {
 	watcher := &watch.Watcher{
 		Dynamic:   dyn,
 		Discovery: disc,
-		Include: func(gr schema.GroupResource) bool {
-			return !checkconditions.SkipResource(gr) && !excludeResource(gr)
-		},
-		Events: events,
-		Log:    log,
+		Include:   engine.Watch,
+		Events:    events,
+		Log:       log,
 	}
 
 	var notifier monitor.Notifier
@@ -186,8 +177,11 @@ func run(ctx context.Context) error {
 		}
 	}
 	mon := monitor.New(monitor.Config{
-		Args:              &args,
-		ExcludeNamespaces: runOpts.excludeNamespaces,
+		Checks:            engine,
+		IgnoreFindings:    ignore,
+		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
+		StoreType:         storeType(engine),
+		HistoryWindow:     runOpts.historyWindow,
 		StoreRevisions: func(gr schema.GroupResource) bool {
 			return runOpts.revisions && !noRevisions(gr)
 		},
@@ -198,8 +192,12 @@ func run(ctx context.Context) error {
 		Log:            log,
 	}, st, watcher, notifier)
 
+	names := make([]string, 0, len(engine.Checks()))
+	for _, d := range engine.Checks() {
+		names = append(names, d.Name)
+	}
 	log.Info("starting konmon", "version", buildVersion(), "server", config.Host, "db", dbPath,
-		"alertmanagers", strings.Join(runOpts.alertmanagerURLs, ","))
+		"alertmanagers", strings.Join(runOpts.alertmanagerURLs, ","), "checks", strings.Join(names, ","))
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })

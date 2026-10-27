@@ -1,0 +1,44 @@
+check: pod-container-restarts
+cases:
+  - name: crash loop
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses:
+          - {name: app, restartCount: 7, ready: false, state: {waiting: {reason: CrashLoopBackOff}}}
+          - {name: sidecar, restartCount: 9, ready: true, state: {running: {}}}
+    expect:
+      - key: app
+        container: app
+        message: container app restarted 7 times, currently CrashLoopBackOff
+        details: {restartCount: 7, state: CrashLoopBackOff}
+
+  - name: not ready init container
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        initContainerStatuses:
+          - {name: init, restartCount: 5, ready: false, state: {running: {}}}
+    expect:
+      - {container: init, message: "container init restarted 5 times, currently not ready"}
+
+  - name: below the limit
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses:
+          - {name: app, restartCount: 4, ready: false, state: {waiting: {reason: CrashLoopBackOff}}}
+    expect: []
+
+  - name: disabled
+    resource: pods
+    params: {restarts: 0}
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses:
+          - {name: app, restartCount: 40, ready: false, state: {waiting: {reason: CrashLoopBackOff}}}
+    expect: []

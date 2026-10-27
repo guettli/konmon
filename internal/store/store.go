@@ -15,9 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	_ "modernc.org/sqlite" // database/sql driver "sqlite"
+
+	"github.com/guettli/konmon/internal/checks"
 )
 
 const schemaVersion = 1
@@ -82,8 +83,8 @@ CREATE TABLE findings (
 	id          INTEGER PRIMARY KEY,
 	key         TEXT NOT NULL,
 	uid         TEXT NOT NULL,
-	kind        TEXT NOT NULL,
-	finding     TEXT NOT NULL, -- checkconditions.Finding as JSON, latest observation
+	check_name  TEXT NOT NULL,
+	finding     TEXT NOT NULL, -- checks.Finding as JSON, latest observation
 	first_seen  INTEGER NOT NULL,
 	last_seen   INTEGER NOT NULL,
 	resolved_at INTEGER
@@ -364,7 +365,7 @@ func (tx *Tx) addHistory(uid, change string, c Condition, now time.Time) error {
 type FindingRow struct {
 	ID         int64
 	Key        string
-	Finding    checkconditions.Finding
+	Finding    checks.Finding
 	FirstSeen  time.Time
 	LastSeen   time.Time
 	ResolvedAt time.Time // zero while open
@@ -372,9 +373,10 @@ type FindingRow struct {
 
 // SyncFindings makes the open findings equal to current: new findings are
 // opened, known ones are updated, and open findings which are not in current
-// are resolved. It returns the findings which are open afterwards and those
-// resolved by this call.
-func (tx *Tx) SyncFindings(current []checkconditions.Finding, now time.Time) (open, resolved []FindingRow, err error) {
+// are resolved, unless keep returns true for them (keep may be nil). It
+// returns the findings which are open afterwards and those resolved by this
+// call.
+func (tx *Tx) SyncFindings(current []checks.Finding, keep func(*FindingRow) bool, now time.Time) (open, resolved []FindingRow, err error) {
 	active, err := tx.openFindings()
 	if err != nil {
 		return nil, nil, err
@@ -386,7 +388,7 @@ func (tx *Tx) SyncFindings(current []checkconditions.Finding, now time.Time) (op
 	seen := make(map[string]struct{}, len(current))
 	for i := range current {
 		f := current[i]
-		key := f.Key()
+		key := f.ID()
 		if _, dup := seen[key]; dup {
 			continue
 		}
@@ -405,8 +407,8 @@ func (tx *Tx) SyncFindings(current []checkconditions.Finding, now time.Time) (op
 			continue
 		}
 		res, err := tx.tx.ExecContext(tx.ctx,
-			"INSERT INTO findings (key, uid, kind, finding, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-			key, string(f.UID), string(f.Kind), string(data), ms(now), ms(now))
+			"INSERT INTO findings (key, uid, check_name, finding, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+			key, f.UID, f.Check, string(data), ms(now), ms(now))
 		if err != nil {
 			return nil, nil, fmt.Errorf("insert finding %s: %w", key, err)
 		}
@@ -418,6 +420,12 @@ func (tx *Tx) SyncFindings(current []checkconditions.Finding, now time.Time) (op
 	}
 	for _, r := range active {
 		if _, ok := seen[r.Key]; ok {
+			continue
+		}
+		if keep != nil && keep(&r) {
+			// The check failed for this object: it did not say the
+			// finding is gone.
+			open = append(open, r)
 			continue
 		}
 		if _, err := tx.tx.ExecContext(tx.ctx,
@@ -556,6 +564,52 @@ func (s *Store) FindObjects(ctx context.Context, resource, group, namespace, nam
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+// ConditionHistorySince returns the condition changes of all objects after
+// since, by UID.
+func (s *Store) ConditionHistorySince(ctx context.Context, since time.Time) (map[string][]HistoryRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT uid, observed_at, change, type, status, reason, message, last_transition_time
+		FROM condition_history WHERE observed_at >= ? ORDER BY observed_at, id`, ms(since))
+	if err != nil {
+		return nil, fmt.Errorf("read condition history: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := map[string][]HistoryRow{}
+	for rows.Next() {
+		var r HistoryRow
+		var uid string
+		var observed int64
+		if err := rows.Scan(&uid, &observed, &r.Change, &r.Type, &r.Status, &r.Reason, &r.Message, &r.LastTransitionTime); err != nil {
+			return nil, err
+		}
+		r.ObservedAt = fromMS(observed)
+		result[uid] = append(result[uid], r)
+	}
+	return result, rows.Err()
+}
+
+// Objects calls fn for every object which is not deleted, with its JSON.
+func (s *Store) Objects(ctx context.Context, fn func(ref ObjectRef, object []byte) error) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT uid, api_group, api_version, resource, kind, namespace, name, object
+		FROM objects WHERE deleted_at IS NULL ORDER BY api_group, resource, namespace, name`)
+	if err != nil {
+		return fmt.Errorf("read objects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var r ObjectRef
+		var data []byte
+		if err := rows.Scan(&r.UID, &r.GVR.Group, &r.GVR.Version, &r.GVR.Resource, &r.Kind, &r.Namespace, &r.Name, &data); err != nil {
+			return err
+		}
+		if err := fn(r, data); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // HistoryRow is one recorded condition change.
