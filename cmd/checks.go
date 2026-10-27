@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +25,7 @@ import (
 // checkFlags are shared by `run` and `check`.
 type checkFlags struct {
 	configs           []string
+	cfg               *config.Config // loaded from configs
 	dirs              []string
 	disabled          []string
 	params            []string
@@ -77,19 +80,52 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 		}
 		params[check][param] = value
 	}
+	cfg, err := c.config()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cfg.Conditions) > 0 {
+		if _, set := params["conditions"]["rules"]; set {
+			return nil, nil, errors.New("--check-param conditions.rules and a config file with conditions: use one of them")
+		}
+		rules, err := json.Marshal(cfg.Conditions)
+		if err != nil {
+			return nil, nil, err
+		}
+		if params["conditions"] == nil {
+			params["conditions"] = map[string]string{}
+		}
+		params["conditions"]["rules"] = string(rules)
+	}
 	e, err := checks.Load(checks.CoreFiles().Sources, user.Sources, checks.Options{
 		Disabled: c.disabled, Only: only, Categories: categories, Params: params, Timeout: c.timeout, Exclude: exclude, Log: log,
 	})
+	if err != nil && len(cfg.Conditions) > 0 && strings.Contains(err.Error(), `has no param "rules"`) {
+		return nil, nil, fmt.Errorf("%w: the config file has a conditions section, which is passed as param rules; "+
+			"add it to your own conditions check (see 'konmon checks types' and the core checks/conditions.ts)", err)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	return e, user, nil
 }
 
+// config loads the files of --config once.
+func (c *checkFlags) config() (*config.Config, error) {
+	if c.cfg == nil {
+		cfg, err := config.Load(c.configs)
+		if err != nil {
+			return nil, err
+		}
+		c.cfg = cfg
+	}
+	return c.cfg, nil
+}
+
 // ignorer combines the rules of --config and --ignore-finding-regex. It
 // returns nil if there are none.
 func (c *checkFlags) ignorer() (*ignorer, error) {
-	cfg, err := config.Load(c.configs)
+	cfg, err := c.config()
 	if err != nil {
 		return nil, err
 	}

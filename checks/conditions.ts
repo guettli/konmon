@@ -4,8 +4,9 @@
 // hard part of a generic condition check is polarity: for most condition
 // types True is good (Ready, Available), for some False is good
 // (MemoryPressure, Degraded), and some are fine either way. The tables below
-// collect that knowledge. If a condition is reported wrongly, add it here
-// or override this check with your own file of the same name.
+// collect that knowledge. If a condition is reported wrongly, teach konmon
+// in the "conditions" section of the config file (param "rules"), add it
+// here, or override this check with your own file of the same name.
 import { defineCheck, parseTime, Condition, KubeObject } from "konmon";
 
 // Condition types which can be True or False, and both values are fine.
@@ -187,6 +188,33 @@ const ignore: RegExp[] = [
   /installations Progressing=False AllObjectsAvailable/,
 ];
 
+// Polarity taught by the user (config file, section "conditions"), keyed
+// by "resource.group" (core: "resource") or "*" for any resource; the rules
+// of the resource are looked at before "*". It wins over the built-in
+// polarity tables; the ignore list and done() below still apply. Other
+// statuses than True and False (Unknown) are reported unless the type is in
+// ignoreTypes.
+interface Rules {
+  healthyWhenTrue?: string[];
+  healthyWhenFalse?: string[];
+  ignoreTypes?: string[];
+}
+
+// taught returns the healthy status of a condition type, "skip" if both
+// values are fine, or undefined if the user did not teach it.
+function taught(rules: Record<string, Rules>, resource: string, t: string): "True" | "False" | "skip" | undefined {
+  // Arrays only: on a string (a wrong --check-param) includes() would
+  // match substrings.
+  const has = (list: unknown, t: string) => Array.isArray(list) && list.includes(t);
+  for (const r of [rules[resource], rules["*"]]) {
+    if (r == null) continue;
+    if (has(r.ignoreTypes, t)) return "skip";
+    if (has(r.healthyWhenTrue, t)) return "True";
+    if (has(r.healthyWhenFalse, t)) return "False";
+  }
+  return undefined;
+}
+
 function positive(resource: string, t: string): boolean {
   return (
     positiveAnyResource.includes(t) ||
@@ -259,9 +287,13 @@ export default defineCheck({
     // A Pod which has not restarted yet may have ContainersReady=False and
     // Initialized=False for this long while it starts. 0 disables it.
     podStartGraceSeconds: 30,
+    // Polarity of condition types, from the "conditions" section of the
+    // config file: {"widgets.example.com": {"healthyWhenFalse": ["Stalled"]}}.
+    rules: {} as Record<string, Rules>,
   },
   check(obj, ctx) {
     const resource = ctx.resource.resource;
+    const fullResource = ctx.resource.group === "" ? resource : `${resource}.${ctx.resource.group}`;
     // hetznerbaremetalhosts store their conditions in spec.status.
     const raw = resource === "hetznerbaremetalhosts" ? obj.spec?.status?.conditions : obj.status?.conditions;
     if (raw == null) return [];
@@ -275,9 +307,13 @@ export default defineCheck({
       if (c == null || typeof c !== "object") continue;
       const type = typeof c.type === "string" ? c.type : "";
       const status = typeof c.status === "string" ? c.status : "";
-      if (typesToSkip.includes(type)) continue;
-      if (status === "True" && positive(resource, type)) continue;
-      if (status === "False" && negative(resource, type)) continue;
+      const healthy = taught(ctx.params.rules, fullResource, type);
+      if (healthy === "skip" || healthy === status) continue;
+      if (healthy === undefined) {
+        if (typesToSkip.includes(type)) continue;
+        if (status === "True" && positive(resource, type)) continue;
+        if (status === "False" && negative(resource, type)) continue;
+      }
       const reason = typeof c.reason === "string" ? c.reason : "";
       const message = typeof c.message === "string" ? c.message : "";
       const line = `${resource} ${type}=${status} ${reason} ${JSON.stringify(message)}`;

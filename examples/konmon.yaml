@@ -21,3 +21,12 @@ ignore:
   - check: container-resources-missing
     namespace: liqo*
     comment: The liqo chart has no way to set resources.
+
+# Teach the conditions check which status of a condition type is healthy.
+# Better than ignoring: a taught condition is still reported when it has its
+# bad status. Keys are resource.group (a bare name is the core group) or "*".
+conditions:
+  widgets.example.com:
+    healthyWhenTrue: [Synced]
+    healthyWhenFalse: [Stalled, Degraded]
+    ignoreTypes: [LastSyncAttempted]

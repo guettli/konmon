@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,60 @@ func TestIgnorer(t *testing.T) {
 	}
 	if _, err := (&checkFlags{ignoreFindings: []string{"("}}).ignorer(); err == nil {
 		t.Error("want an error for an invalid regex")
+	}
+}
+
+func TestConfigConditionsBecomeParam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	if err := os.WriteFile(path, []byte("conditions:\n  widgets.example.com: {healthyWhenFalse: [Stalled]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := checkFlags{configs: []string{path}, timeout: time.Second}
+	e, _, err := c.engine(slog.New(slog.DiscardHandler), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range e.Checks() {
+		if d.Name == "conditions" {
+			rules, _ := d.Params["rules"].(map[string]any)
+			if _, ok := rules["widgets.example.com"]; !ok {
+				t.Errorf("rules param: %v", d.Params["rules"])
+			}
+		}
+	}
+	c = checkFlags{configs: []string{path}, params: []string{`conditions.rules={}`}}
+	if _, _, err := c.engine(slog.New(slog.DiscardHandler), nil, nil); err == nil {
+		t.Error("want an error for --check-param conditions.rules together with a config")
+	}
+}
+
+func TestConfigConditionsWithOwnConditionsCheck(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "konmon.yaml")
+	if err := os.WriteFile(path, []byte("conditions:\n  '*': {healthyWhenFalse: [Ready]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The tests of the core checks start from the defaults, not from the
+	// config: an inverted Ready must not make them fail.
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetArgs([]string{"checks", "test", "--config", path})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("checks test --config: %v\n%s", err, out.String())
+	}
+	checksFlags = checkFlags{}
+
+	own := filepath.Join(dir, "checks")
+	if err := os.Mkdir(own, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	code := `export default { name: "conditions", match: { resources: ["pods"] }, check() { return []; } };`
+	if err := os.WriteFile(filepath.Join(own, "conditions.js"), []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := checkFlags{configs: []string{path}, dirs: []string{own}, timeout: time.Second}
+	if _, _, err := c.engine(slog.New(slog.DiscardHandler), nil, nil); err == nil || !strings.Contains(err.Error(), "conditions section") {
+		t.Errorf("want a hint about the conditions section, got %v", err)
 	}
 }

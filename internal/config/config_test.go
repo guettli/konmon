@@ -136,3 +136,63 @@ func TestExampleConfig(t *testing.T) {
 		t.Error("the example has no rules")
 	}
 }
+
+func TestConditions(t *testing.T) {
+	cfg, err := Parse([]byte(`
+conditions:
+  Widgets.example.com:
+    healthyWhenFalse: [Stalled]
+  pods:
+    ignoreTypes: [Flaky]
+  "*":
+    healthyWhenTrue: [Synced]
+`), "c.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed, err := Parse([]byte("conditions:\n  Widgets.Example.COM: {ignoreTypes: [A]}\n"), "c.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mixed.Conditions["widgets.example.com"] == nil {
+		t.Errorf("the group must be lower case: %v", mixed.Conditions)
+	}
+	if cfg.Conditions["widgets.example.com"] == nil || cfg.Conditions["pods"] == nil || cfg.Conditions["*"] == nil {
+		t.Errorf("keys: %v", cfg.Conditions)
+	}
+	for name, data := range map[string]string{
+		"both polarities": "conditions:\n  pods: {healthyWhenTrue: [A], healthyWhenFalse: [A]}\n",
+		"no types":        "conditions:\n  pods: {}\n",
+		"empty":           "conditions:\n  pods:\n",
+		"empty type":      "conditions:\n  pods: {ignoreTypes: ['']}\n",
+		"bad resource":    "conditions:\n  pods/log: {ignoreTypes: [A]}\n",
+		"unknown field":   "conditions:\n  pods: {healthyWhenTru: [A]}\n",
+		"same type twice": "conditions:\n  pods: {ignoreTypes: [A]}\n  Pods: {ignoreTypes: [B]}\n",
+	} {
+		if _, err := Parse([]byte(data), "c.yaml"); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.yaml"), filepath.Join(dir, "b.yaml")
+	if err := os.WriteFile(a, []byte("conditions:\n  pods: {healthyWhenTrue: [A]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("conditions:\n  pods: {healthyWhenTrue: [B]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := Load([]string{a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(merged.Conditions["pods"].HealthyWhenTrue, ","); got != "A,B" {
+		t.Errorf("merged: %s", got)
+	}
+	if err := os.WriteFile(b, []byte("conditions:\n  pods: {healthyWhenFalse: [A]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load([]string{a, b}); err == nil {
+		t.Error("want an error for a conflict between files")
+	}
+}

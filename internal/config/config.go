@@ -1,5 +1,6 @@
-// Package config reads konmon's config file: rules which ignore findings.
-// It is meant to be reviewed and kept in git, e.g. as a ConfigMap.
+// Package config reads konmon's config file: rules which ignore findings,
+// and the polarity of condition types. It is meant to be reviewed and kept
+// in git, e.g. as a ConfigMap.
 package config
 
 import (
@@ -21,6 +22,20 @@ import (
 // Config is the content of one or more config files.
 type Config struct {
 	Ignore []*IgnoreRule `yaml:"ignore"`
+	// Conditions teaches the conditions check which status of a condition
+	// type is healthy, by resource type ("resource.group", a bare name is
+	// the core group, "*" any resource).
+	Conditions map[string]*ConditionRules `yaml:"conditions"`
+}
+
+// ConditionRules is the polarity of condition types of one resource type.
+// Unlike an ignore rule, a taught condition is still reported when it has
+// the other status.
+type ConditionRules struct {
+	HealthyWhenTrue  []string `yaml:"healthyWhenTrue,omitempty" json:"healthyWhenTrue,omitempty"`
+	HealthyWhenFalse []string `yaml:"healthyWhenFalse,omitempty" json:"healthyWhenFalse,omitempty"`
+	// IgnoreTypes are informational: both values are fine.
+	IgnoreTypes []string `yaml:"ignoreTypes,omitempty" json:"ignoreTypes,omitempty"`
 }
 
 // IgnoreRule drops the findings it matches. All fields which are set must
@@ -59,6 +74,22 @@ func Load(paths []string) (*Config, error) {
 			return nil, err
 		}
 		cfg.Ignore = append(cfg.Ignore, c.Ignore...)
+		for resource, r := range c.Conditions {
+			if cfg.Conditions == nil {
+				cfg.Conditions = map[string]*ConditionRules{}
+			}
+			merged := cfg.Conditions[resource]
+			if merged == nil {
+				merged = &ConditionRules{}
+				cfg.Conditions[resource] = merged
+			}
+			merged.HealthyWhenTrue = append(merged.HealthyWhenTrue, r.HealthyWhenTrue...)
+			merged.HealthyWhenFalse = append(merged.HealthyWhenFalse, r.HealthyWhenFalse...)
+			merged.IgnoreTypes = append(merged.IgnoreTypes, r.IgnoreTypes...)
+			if err := merged.validate(); err != nil {
+				return nil, fmt.Errorf("%s: conditions %s: %w", p, resource, err)
+			}
+		}
 	}
 	return cfg, nil
 }
@@ -76,6 +107,28 @@ func Parse(data []byte, name string) (*Config, error) {
 		// Rules in a second document would be silently dropped.
 		return nil, fmt.Errorf("%s: only one YAML document is allowed (no ---)", name)
 	}
+	conditions := make(map[string]*ConditionRules, len(cfg.Conditions))
+	for key, r := range cfg.Conditions {
+		resource := "*"
+		if key != "*" {
+			gr, err := checks.ParseResource(strings.ToLower(key))
+			if err != nil {
+				return nil, fmt.Errorf("%s: conditions: %w", name, err)
+			}
+			resource = checks.FormatResource(gr)
+		}
+		if r == nil {
+			return nil, fmt.Errorf("%s: conditions %s is empty", name, key)
+		}
+		if _, dup := conditions[resource]; dup {
+			return nil, fmt.Errorf("%s: conditions %s is given twice", name, resource)
+		}
+		if err := r.validate(); err != nil {
+			return nil, fmt.Errorf("%s: conditions %s: %w", name, key, err)
+		}
+		conditions[resource] = r
+	}
+	cfg.Conditions = conditions
 	for i, r := range cfg.Ignore {
 		if r == nil {
 			return nil, fmt.Errorf("%s: ignore[%d] is empty", name, i)
@@ -86,6 +139,28 @@ func Parse(data []byte, name string) (*Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func (r *ConditionRules) validate() error {
+	seen := map[string]string{}
+	for _, l := range []struct {
+		name  string
+		types []string
+	}{{"healthyWhenTrue", r.HealthyWhenTrue}, {"healthyWhenFalse", r.HealthyWhenFalse}, {"ignoreTypes", r.IgnoreTypes}} {
+		for _, t := range l.types {
+			if strings.TrimSpace(t) == "" {
+				return fmt.Errorf("%s: empty condition type", l.name)
+			}
+			if other, ok := seen[t]; ok && other != l.name {
+				return fmt.Errorf("condition type %s is in %s and %s", t, other, l.name)
+			}
+			seen[t] = l.name
+		}
+	}
+	if len(seen) == 0 {
+		return errors.New("no condition types: use healthyWhenTrue, healthyWhenFalse or ignoreTypes")
+	}
+	return nil
 }
 
 func (r *IgnoreRule) compile() error {
