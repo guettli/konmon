@@ -29,7 +29,7 @@ func TestFindingFilter(t *testing.T) {
 	health := testFinding("conditions", checks.CategoryHealth, "app-a", "x")
 	hygiene := testFinding("container-image-tag", checks.CategoryHygiene, "app-b", "y")
 	cluster := testFinding("conditions", checks.CategoryHealth, "", "node1")
-	checkError := checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Message: "check x failed"}
+	checkError := checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Message: "check x failed for 2 objects, e.g. other/z"}
 
 	cases := []struct {
 		filter findingFilter
@@ -37,6 +37,7 @@ func TestFindingFilter(t *testing.T) {
 	}{
 		{findingFilter{}, []bool{true, true, true, true}},
 		{findingFilter{categories: []string{"health"}}, []bool{true, false, true, true}},
+		{findingFilter{categories: []string{"hygiene"}}, []bool{false, true, false, true}},
 		{findingFilter{namespaces: []string{"app-*"}}, []bool{true, true, false, true}},
 		{findingFilter{namespaces: []string{"app-b"}, categories: []string{"health"}}, []bool{false, false, false, true}},
 	}

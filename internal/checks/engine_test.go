@@ -306,6 +306,9 @@ func TestLoadOnly(t *testing.T) {
 	if len(e.Checks()) != 1 || e.Checks()[0].Name != "pv-released" {
 		t.Errorf("want only pv-released, got %d checks", len(e.Checks()))
 	}
+	if _, err := Load(core.Sources, nil, Options{Only: []string{"pv-released"}, Categories: []string{CategoryHealth}}); err == nil {
+		t.Error("want an error when no check is left")
+	}
 	if _, err := Load(core.Sources, nil, Options{Only: []string{"conditoins"}}); err == nil || !strings.Contains(err.Error(), "conditoins") {
 		t.Errorf("want an error for a pattern which matches no check, got %v", err)
 	}

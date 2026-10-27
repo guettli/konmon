@@ -209,10 +209,10 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 type checkResult struct {
 	Findings []jsonFinding `json:"findings"`
 	// NotAllowed are the resource types RBAC does not allow to list.
-	NotAllowed []string `json:"notAllowed,omitempty"`
+	NotAllowed []string `json:"notAllowed"`
 	// NotChecked are errors of resource types or API groups which could
 	// not be listed.
-	NotChecked []string `json:"notChecked,omitempty"`
+	NotChecked []string `json:"notChecked"`
 	Objects    int      `json:"objects"`
 	Types      int      `json:"types"`
 	Checks     int      `json:"checks"`

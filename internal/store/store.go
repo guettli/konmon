@@ -101,29 +101,53 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open opens (and creates or migrates) the database at path.
-func Open(ctx context.Context, path string) (*Store, error) {
-	return open(ctx, path, true)
-}
-
-// OpenExisting opens the database of a 'konmon run' at path, for reading.
-// Unlike Open it never creates one: a wrong path is an error, not an empty
-// history.
+// OpenExisting opens the database of a 'konmon run' at path, read-only.
+// Unlike Open it never creates or changes one: a wrong path is an error,
+// not an empty history. It works on a running database (WAL) and on a copy
+// in a read-only directory.
 func OpenExisting(ctx context.Context, path string) (*Store, error) {
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		return nil, fmt.Errorf("no konmon database: %w", err)
 	}
-	return open(ctx, path, false)
+	if info.Size() == 0 {
+		return nil, fmt.Errorf("%s is not a konmon database (empty file)", path)
+	}
+	s, err := openReadOnly(ctx, path, "mode=ro")
+	if err != nil {
+		// Without write access to the directory SQLite cannot create the
+		// -shm file of a WAL database. immutable skips locking (and a WAL
+		// which was not checkpointed): fine for a copy.
+		var errImmutable error
+		if s, errImmutable = openReadOnly(ctx, path, "immutable=1"); errImmutable != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
-func open(ctx context.Context, path string, create bool) (*Store, error) {
+func openReadOnly(ctx context.Context, path, mode string) (*Store, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?"+mode+"&_pragma=busy_timeout(10000)")
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	s := &Store{db: db}
+	if err := s.checkVersion(ctx, path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Open opens (and creates or migrates) the database at path.
+func Open(ctx context.Context, path string) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(ctx, path, create); err != nil {
+	if err := s.migrate(ctx, path); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -135,22 +159,38 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) migrate(ctx context.Context, path string, create bool) error {
+// version reads the schema version; 0 is an empty database.
+func (s *Store) version(ctx context.Context, path string) (int, error) {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("%s: read schema version: %w", path, err)
+		return 0, fmt.Errorf("%s: read schema version: %w", path, err)
 	}
 	switch {
-	case version == schemaVersion:
-		return nil
-	case version == 0 && !create:
-		return fmt.Errorf("%s is not a konmon database", path)
 	case version == 1:
 		// Version 1 was only used before the first release, with
 		// check-conditions findings.
-		return errors.New("database schema version 1 is from a development version of konmon: delete the database file")
+		return 0, errors.New("database schema version 1 is from a development version of konmon: delete the database file")
 	case version > schemaVersion:
-		return fmt.Errorf("database schema version %d is newer than this konmon (%d)", version, schemaVersion)
+		return 0, fmt.Errorf("database schema version %d is newer than this konmon (%d)", version, schemaVersion)
+	}
+	return version, nil
+}
+
+func (s *Store) checkVersion(ctx context.Context, path string) error {
+	version, err := s.version(ctx, path)
+	if err != nil {
+		return err
+	}
+	if version != schemaVersion {
+		return fmt.Errorf("%s is not a konmon database", path)
+	}
+	return nil
+}
+
+func (s *Store) migrate(ctx context.Context, path string) error {
+	version, err := s.version(ctx, path)
+	if err != nil || version == schemaVersion {
+		return err
 	}
 	return s.Update(ctx, func(tx *Tx) error {
 		if _, err := tx.tx.ExecContext(ctx, schemaSQL); err != nil {

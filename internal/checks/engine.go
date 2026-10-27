@@ -114,6 +114,9 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 		}
 		e.defs = append(e.defs, d)
 	}
+	if len(e.defs) == 0 && (len(opts.Only) > 0 || len(opts.Categories) > 0) {
+		return nil, fmt.Errorf("no check left to run: selected %v, categories %v, disabled %v", opts.Only, opts.Categories, opts.Disabled)
+	}
 	sort.Slice(e.defs, func(i, j int) bool { return e.defs[i].Name < e.defs[j].Name })
 	return e, nil
 }

@@ -58,7 +58,7 @@ Examples:
 
 func printFindings(w io.Writer, rows []store.FindingRow, at time.Time, filter *findingFilter) error {
 	if filter.output == "json" {
-		result := findingsResult{At: at, Findings: []jsonFinding{}}
+		result := findingsResult{At: at.UTC().Truncate(time.Millisecond), Findings: []jsonFinding{}}
 		for i := range rows {
 			if filter.match(&rows[i].Finding) {
 				j := toJSONFinding(&rows[i].Finding)

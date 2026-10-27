@@ -23,8 +23,8 @@ type findingFilter struct {
 
 func (o *findingFilter) register(f *pflag.FlagSet) {
 	f.StringSliceVarP(&o.namespaces, "namespace", "n", nil,
-		"Only show findings of objects in these namespaces (cluster-scoped objects are left out). Comma-separated, glob patterns allowed.")
-	f.StringSliceVar(&o.categories, "category", nil, "Only show findings of these categories: health, hygiene. Comma-separated. Default: both.")
+		"Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed.")
+	f.StringSliceVar(&o.categories, "category", nil, "Only show findings of these categories: health, hygiene (failing checks are always shown). Comma-separated. Default: both.")
 	f.StringVarP(&o.output, "output", "o", "text", "Output format: text or json.")
 }
 
@@ -46,12 +46,15 @@ func (o *findingFilter) validate() error {
 }
 
 func (o *findingFilter) match(f *checks.Finding) bool {
+	if f.Check == checks.ErrorCheck {
+		// A failing check makes every result incomplete, whatever the
+		// filter: never hide it.
+		return true
+	}
 	if len(o.categories) > 0 && !slices.Contains(o.categories, f.Category) {
 		return false
 	}
-	if len(o.namespaces) > 0 && f.UID != "" {
-		// A check-error (no UID) is about a check, not an object: keep it,
-		// the result is incomplete without that check.
+	if len(o.namespaces) > 0 {
 		if f.Namespace == "" || !matchGlob(f.Namespace, o.namespaces) {
 			return false
 		}
@@ -91,10 +94,10 @@ func printFindingLines(w io.Writer, shown []shownFinding) (health, hygiene int) 
 }
 
 // countText is "1 health finding, 2 hygiene findings", without the
-// categories which were not asked for.
+// categories which were not asked for (unless a failing check is counted).
 func (o *findingFilter) countText(health, hygiene int) string {
 	var parts []string
-	if len(o.categories) == 0 || slices.Contains(o.categories, checks.CategoryHealth) {
+	if health > 0 || len(o.categories) == 0 || slices.Contains(o.categories, checks.CategoryHealth) {
 		parts = append(parts, plural(health, "health finding"))
 	}
 	if len(o.categories) == 0 || slices.Contains(o.categories, checks.CategoryHygiene) {
