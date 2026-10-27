@@ -264,7 +264,8 @@ func TestLoadErrorsAndOverrides(t *testing.T) {
 			t.Error("conditions was not overridden")
 		}
 	}
-	if strings.Join(names, ",") != "conditions,deletion-timestamp" {
+	joined := "," + strings.Join(names, ",") + ","
+	if !strings.Contains(joined, ",conditions,") || !strings.Contains(joined, ",deletion-timestamp,") || strings.Contains(joined, ",pod-") {
 		t.Errorf("checks: %v", names)
 	}
 
@@ -304,9 +305,10 @@ func TestWatchAndStore(t *testing.T) {
 	}{
 		{"pods", true, true},
 		{"secrets", false, false},
-		{"configmaps", false, false},
+		{"configmaps", true, false},                     // read by configmap-key-missing only
 		{"endpointslices.discovery.k8s.io", true, true}, // conditions matches "*"
-		{"cronjobs.batch", false, false},
+		{"cronjobs.batch", true, true},
+		{"events", false, false},
 	} {
 		if got := e.Watch(gr(tc.resource)); got != tc.watch {
 			t.Errorf("Watch(%s) = %v", tc.resource, got)
@@ -380,7 +382,7 @@ func TestCoreTestsOfReplacedChecksAreSkipped(t *testing.T) {
 	}
 	for _, p := range core.TestPaths() {
 		tf := core.Tests[p]
-		want := tf.Check == "pod-container-restarts"
+		want := tf.Check != "conditions" && tf.Check != "deletion-timestamp"
 		if got := e.Tested(tf, true); got != want {
 			t.Errorf("Tested(%s) = %v, want %v", tf.Check, got, want)
 		}

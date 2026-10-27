@@ -1,0 +1,11 @@
+check: admission-policy-warnings
+cases:
+  - name: type-check warning
+    resource: validatingadmissionpolicies.admissionregistration.k8s.io
+    object:
+      metadata: {name: p}
+      status:
+        typeChecking:
+          expressionWarnings: [{fieldRef: "spec.validations[0].expression", warning: "no such key: foo"}]
+    expect:
+      - {key: "spec.validations[0].expression", message: "CEL type-check warning at spec.validations[0].expression: no such key: foo"}

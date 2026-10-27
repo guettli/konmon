@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"time"
 
 	"github.com/dop251/goja"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,6 +26,8 @@ type Definition struct {
 	ExcludeTypes   []string
 	ReadsResources []string
 	Uses           []string
+	// For overrides konmon's --for for findings of this check (0: default).
+	For time.Duration
 	// Params are the effective parameters: defaults merged with overrides.
 	Params map[string]any
 
@@ -65,6 +68,7 @@ type rawDefinition struct {
 	} `json:"match"`
 	Reads  []string       `json:"reads"`
 	Uses   []string       `json:"uses"`
+	For    float64        `json:"forSeconds"`
 	Params map[string]any `json:"params"`
 }
 
@@ -91,7 +95,7 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	d := &Definition{
 		Name: raw.Name, Category: raw.Category, Severity: raw.Severity, Path: src.Path, Core: core,
 		MatchResources: raw.Match.Resources, ExcludeTypes: raw.Match.Exclude, ReadsResources: raw.Reads,
-		Uses: raw.Uses, Params: raw.Params, program: prg,
+		Uses: raw.Uses, Params: raw.Params, program: prg, For: time.Duration(raw.For * float64(time.Second)),
 	}
 	if d.Params == nil {
 		d.Params = map[string]any{}
@@ -108,9 +112,7 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	if d.Severity == "" {
 		d.Severity = "warning"
 	}
-	switch d.Severity {
-	case "critical", "warning", "info":
-	default:
+	if !validSeverity(d.Severity) {
 		return nil, fmt.Errorf("%s: severity must be critical, warning or info", src.Path)
 	}
 	if len(d.MatchResources) == 0 {
@@ -124,6 +126,9 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	}
 	if d.reads, err = parseResourceSet(d.ReadsResources, false); err != nil {
 		return nil, fmt.Errorf("%s: reads: %w", src.Path, err)
+	}
+	if d.For < 0 {
+		return nil, fmt.Errorf("%s: forSeconds must not be negative", src.Path)
 	}
 	for _, u := range d.Uses {
 		if u != "history" {
@@ -180,6 +185,10 @@ func (d *Definition) setParams(overrides map[string]string) error {
 		d.Params[k] = v
 	}
 	return nil
+}
+
+func validSeverity(s string) bool {
+	return s == "critical" || s == "warning" || s == "info"
 }
 
 // globMatch reports whether name matches any of the patterns (path.Match).

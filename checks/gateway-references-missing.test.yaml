@@ -1,0 +1,29 @@
+check: gateway-references-missing
+cases:
+  - name: gateway class missing
+    resource: gateways.gateway.networking.k8s.io
+    available: [gatewayclasses.gateway.networking.k8s.io]
+    object:
+      metadata: {name: gw, namespace: infra}
+      spec: {gatewayClassName: cilium}
+    expect:
+      - {message: Gateway uses the GatewayClass cilium which does not exist}
+  - name: route with missing parent, missing backend and wrong port
+    resource: httproutes.gateway.networking.k8s.io
+    available: [gateways.gateway.networking.k8s.io]
+    object:
+      metadata: {name: r, namespace: app}
+      spec:
+        parentRefs: [{name: gw, namespace: infra}]
+        rules:
+          - backendRefs:
+              - {name: web, port: 8080}
+              - {name: gone, port: 80}
+              - {name: web}
+    related:
+      - resource: services
+        object: {metadata: {name: web, namespace: app}, spec: {ports: [{port: 80}]}}
+    expect:
+      - {message: HTTPRoute uses the Gateway infra/gw which does not exist}
+      - {message: "HTTPRoute uses port 8080 of Service app/web, which the Service does not define"}
+      - {message: HTTPRoute uses the Service app/gone which does not exist}

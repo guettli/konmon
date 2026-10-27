@@ -29,6 +29,49 @@ export function parseTime(s) {
   const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
+export function matchesSelector(labels, selector) {
+  if (selector == null) return false;
+  labels = labels || {};
+  const ml = selector.matchLabels || {};
+  for (const k of Object.keys(ml)) if (labels[k] !== ml[k]) return false;
+  for (const e of selector.matchExpressions || []) {
+    const has = Object.prototype.hasOwnProperty.call(labels, e.key);
+    const values = e.values || [];
+    switch (e.operator) {
+      case "In": if (!has || !values.includes(labels[e.key])) return false; break;
+      case "NotIn": if (has && values.includes(labels[e.key])) return false; break;
+      case "Exists": if (!has) return false; break;
+      case "DoesNotExist": if (has) return false; break;
+      default: return false;
+    }
+  }
+  return true;
+}
+export function isEmptySelector(selector) {
+  return selector != null && Object.keys(selector.matchLabels || {}).length === 0 && (selector.matchExpressions || []).length === 0;
+}
+const workloadPaths = {
+  pods: ["spec"],
+  deployments: ["spec", "template", "spec"],
+  statefulsets: ["spec", "template", "spec"],
+  daemonsets: ["spec", "template", "spec"],
+  replicasets: ["spec", "template", "spec"],
+  replicationcontrollers: ["spec", "template", "spec"],
+  jobs: ["spec", "template", "spec"],
+  cronjobs: ["spec", "jobTemplate", "spec", "template", "spec"],
+};
+export function podSpec(obj, resource) {
+  const p = workloadPaths[resource];
+  if (!p) return undefined;
+  let v = obj;
+  for (const k of p) { if (v == null) return undefined; v = v[k]; }
+  return v == null ? undefined : v;
+}
+export function podLabels(obj, resource) {
+  if (resource === "pods") return (obj.metadata && obj.metadata.labels) || {};
+  if (resource === "cronjobs") return (((obj.spec || {}).jobTemplate || {}).spec || {}).template?.metadata?.labels || {};
+  return ((obj.spec || {}).template || {}).metadata?.labels || {};
+}
 `
 
 // compile bundles a check file with esbuild (TypeScript is stripped, the

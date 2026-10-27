@@ -1,0 +1,53 @@
+check: service-without-endpoints
+cases:
+  - name: pods exist, no endpoints
+    resource: services
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web, tier: front}}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web, tier: front}}, status: {phase: Pending}}}
+    expect:
+      - {message: "Service has no ready endpoints, but 1 Pods match its selector app=web,tier=front"}
+  - name: endpoints not ready
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web}}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, status: {phase: Running}}}
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: web-x, namespace: default, labels: {kubernetes.io/service-name: web}}
+          endpoints: [{addresses: [10.0.0.1], conditions: {ready: false}}]
+    expect:
+      - {message: "Service has no ready endpoints, but 1 Pods match its selector app=web"}
+  - name: ready endpoint, also without conditions
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web}}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, status: {phase: Running}}}
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: web-x, namespace: default, labels: {kubernetes.io/service-name: web}}
+          endpoints: [{addresses: [10.0.0.1]}]
+    expect: []
+  - name: scaled to zero, or only finished pods
+    resource: services
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {selector: {app: web}}
+    related:
+      - {resource: pods, object: {metadata: {name: job-1, namespace: default, labels: {app: web}}, status: {phase: Succeeded}}}
+    expect: []
+  - name: no selector or ExternalName
+    resource: services
+    available: [endpointslices.discovery.k8s.io, pods]
+    object:
+      metadata: {name: ext, namespace: default}
+      spec: {type: ExternalName, externalName: example.com}
+    expect: []

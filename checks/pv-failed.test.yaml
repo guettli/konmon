@@ -1,0 +1,15 @@
+check: pv-failed
+cases:
+  - name: failed
+    resource: persistentvolumes
+    object:
+      metadata: {name: pv1}
+      status: {phase: Failed, message: "recycler failed"}
+    expect:
+      - {message: "PersistentVolume is Failed: recycler failed"}
+  - name: bound
+    resource: persistentvolumes
+    object:
+      metadata: {name: pv1}
+      status: {phase: Bound}
+    expect: []

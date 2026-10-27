@@ -1,0 +1,15 @@
+check: pv-released
+cases:
+  - name: released
+    resource: persistentvolumes
+    object:
+      metadata: {name: pv1}
+      status: {phase: Released}
+    expect:
+      - {message: PersistentVolume is Released and not used by a claim}
+  - name: bound
+    resource: persistentvolumes
+    object:
+      metadata: {name: pv1}
+      status: {phase: Bound}
+    expect: []

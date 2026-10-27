@@ -1,0 +1,43 @@
+check: workload-not-ready
+cases:
+  - name: statefulset not ready
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default, generation: 3}
+      spec: {replicas: 3}
+      status: {observedGeneration: 3, readyReplicas: 1}
+    expect:
+      - {message: StatefulSet has 1/3 ready replicas}
+  - name: statefulset rolling out
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default, generation: 4}
+      spec: {replicas: 3}
+      status: {observedGeneration: 3, readyReplicas: 1}
+    expect: []
+  - name: daemonset ready
+    resource: daemonsets.apps
+    object:
+      metadata: {name: ds, namespace: default, generation: 1}
+      status: {observedGeneration: 1, desiredNumberScheduled: 2, numberReady: 2}
+    expect: []
+  - name: daemonset not ready
+    resource: daemonsets.apps
+    object:
+      metadata: {name: ds, namespace: default, generation: 1}
+      status: {observedGeneration: 1, desiredNumberScheduled: 2, numberReady: 1}
+    expect:
+      - {message: DaemonSet has 1/2 ready Pods, details: {ready: 1, desired: 2}}
+  - name: statefulset rolling update
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default, generation: 3}
+      spec: {replicas: 3}
+      status: {observedGeneration: 3, readyReplicas: 2, updatedReplicas: 1, currentRevision: db-1, updateRevision: db-2}
+    expect: []
+  - name: daemonset rolling update
+    resource: daemonsets.apps
+    object:
+      metadata: {name: ds, namespace: default, generation: 2}
+      status: {observedGeneration: 2, desiredNumberScheduled: 3, numberReady: 2, updatedNumberScheduled: 2}
+    expect: []

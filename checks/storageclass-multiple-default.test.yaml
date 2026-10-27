@@ -1,0 +1,16 @@
+check: storageclass-multiple-default
+cases:
+  - name: two defaults
+    resource: storageclasses.storage.k8s.io
+    object:
+      metadata: {name: a, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}
+    related:
+      - {resource: storageclasses.storage.k8s.io, object: {metadata: {name: b, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}}}
+      - {resource: storageclasses.storage.k8s.io, object: {metadata: {name: c}}}
+    expect:
+      - {message: "2 StorageClasses are marked as default: a, b"}
+  - name: one default
+    resource: storageclasses.storage.k8s.io
+    object:
+      metadata: {name: a, annotations: {storageclass.kubernetes.io/is-default-class: "true"}}
+    expect: []

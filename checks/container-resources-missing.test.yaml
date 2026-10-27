@@ -1,0 +1,14 @@
+check: container-resources-missing
+cases:
+  - name: one without resources
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {memory: 1Gi}}}
+              - {name: b, image: x}
+    expect:
+      - {key: b, message: container b has no resource requests or limits}

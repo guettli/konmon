@@ -1,0 +1,18 @@
+check: admission-policy-missing
+cases:
+  - name: binding without policy
+    resource: validatingadmissionpolicybindings.admissionregistration.k8s.io
+    available: [validatingadmissionpolicies.admissionregistration.k8s.io]
+    object:
+      metadata: {name: b}
+      spec: {policyName: p}
+    expect:
+      - {message: binding references the ValidatingAdmissionPolicy p which does not exist}
+  - name: policy exists
+    resource: validatingadmissionpolicybindings.admissionregistration.k8s.io
+    object:
+      metadata: {name: b}
+      spec: {policyName: p}
+    related:
+      - {resource: validatingadmissionpolicies.admissionregistration.k8s.io, object: {metadata: {name: p}}}
+    expect: []

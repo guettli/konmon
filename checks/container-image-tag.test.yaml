@@ -1,0 +1,25 @@
+check: container-image-tag
+cases:
+  - name: latest, no tag, registry port, digest
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: init, image: "busybox"}]
+            containers:
+              - {name: a, image: "nginx:latest"}
+              - {name: b, image: "registry:5000/team/app"}
+              - {name: c, image: "registry:5000/team/app:1.2"}
+              - {name: d, image: "nginx@sha256:0123456789abcdef"}
+    expect:
+      - {key: init, message: container init uses image busybox without a tag}
+      - {key: a, message: "container a uses image nginx:latest"}
+      - {key: b, message: "container b uses image registry:5000/team/app without a tag"}
+  - name: pods of workloads are reported via the workload
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, ownerReferences: [{uid: x, kind: ReplicaSet, name: r, apiVersion: apps/v1, controller: true}]}
+      spec: {containers: [{name: a, image: "nginx"}]}
+    expect: []

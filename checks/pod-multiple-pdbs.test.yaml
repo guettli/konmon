@@ -1,0 +1,29 @@
+check: pod-multiple-pdbs
+cases:
+  - name: two PDBs
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, labels: {app: web, tier: front}}
+    related:
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: b, namespace: default}, spec: {selector: {matchLabels: {app: web}}}}}
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: a, namespace: default}, spec: {selector: {matchExpressions: [{key: tier, operator: In, values: [front]}]}}}}
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: c, namespace: default}, spec: {selector: {matchLabels: {app: db}}}}}
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: d, namespace: other}, spec: {selector: {matchLabels: {app: web}}}}}
+    expect:
+      - {message: "Pod is selected by 2 PodDisruptionBudgets (a, b): it cannot be evicted"}
+  - name: one PDB
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, labels: {app: web}}
+    related:
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: b, namespace: default}, spec: {selector: {matchLabels: {app: web}}}}}
+    expect: []
+  - name: an empty selector selects every pod
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, labels: {app: web}}
+    related:
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: all, namespace: default}, spec: {selector: {}}}}
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: web, namespace: default}, spec: {selector: {matchLabels: {app: web}}}}}
+    expect:
+      - {message: "Pod is selected by 2 PodDisruptionBudgets (all, web): it cannot be evicted"}

@@ -1,0 +1,34 @@
+check: statefulset-references-missing
+cases:
+  - name: missing service and storage class
+    resource: statefulsets.apps
+    available: [services, storageclasses.storage.k8s.io]
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        serviceName: db-headless
+        volumeClaimTemplates:
+          - spec: {storageClassName: fast}
+          - spec: {}
+    expect:
+      - {message: StatefulSet uses the Service db-headless which does not exist}
+      - {message: StatefulSet uses the StorageClass fast which does not exist}
+  - name: all there
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        serviceName: db
+        volumeClaimTemplates: [{spec: {storageClassName: fast}}]
+    related:
+      - {resource: services, object: {metadata: {name: db, namespace: default}}}
+      - {resource: storageclasses.storage.k8s.io, object: {metadata: {name: fast}}}
+    expect: []
+  - name: types not available
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        serviceName: db
+        volumeClaimTemplates: [{spec: {storageClassName: fast}}]
+    expect: []

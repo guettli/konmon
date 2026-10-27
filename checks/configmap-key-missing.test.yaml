@@ -1,0 +1,31 @@
+check: configmap-key-missing
+cases:
+  - name: missing map and key, optional ones are fine
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec:
+        containers:
+          - name: app
+            env:
+              - {name: A, valueFrom: {configMapKeyRef: {name: cfg, key: a}}}
+              - {name: B, valueFrom: {configMapKeyRef: {name: cfg, key: b}}}
+              - {name: C, valueFrom: {configMapKeyRef: {name: cfg, key: c, optional: true}}}
+            envFrom: [{configMapRef: {name: gone}}]
+        volumes:
+          - {name: v, configMap: {name: cfg, items: [{key: a, path: a}, {key: bin, path: b}]}}
+          - {name: o, configMap: {name: other, optional: true}}
+    related:
+      - resource: configmaps
+        object: {metadata: {name: cfg, namespace: default}, data: {a: "1"}, binaryData: {bin: AA==}}
+    expect:
+      - {key: cfg/b, message: ConfigMap cfg has no key b}
+      - {key: gone/, message: ConfigMap gone does not exist}
+  - name: finished pod
+    resource: pods
+    available: [configmaps]
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: app, envFrom: [{configMapRef: {name: pruned}}]}]}
+      status: {phase: Succeeded}
+    expect: []

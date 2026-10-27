@@ -1,0 +1,55 @@
+check: ingress-class-missing
+cases:
+  - name: class exists
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: i, namespace: default}
+      spec: {ingressClassName: nginx}
+    related:
+      - resource: ingressclasses.networking.k8s.io
+        object: {metadata: {name: nginx}}
+    expect: []
+  - name: class missing
+    resource: ingresses.networking.k8s.io
+    available: [ingressclasses.networking.k8s.io]
+    object:
+      metadata: {name: i, namespace: default}
+      spec: {ingressClassName: traefik}
+    expect:
+      - {message: Ingress uses the IngressClass traefik which does not exist}
+  - name: legacy annotation needs no IngressClass object
+    resource: ingresses.networking.k8s.io
+    available: [ingressclasses.networking.k8s.io]
+    object:
+      metadata: {name: i, namespace: default, annotations: {kubernetes.io/ingress.class: kong}}
+    expect: []
+  - name: served, it has a load balancer address
+    resource: ingresses.networking.k8s.io
+    available: [ingressclasses.networking.k8s.io]
+    object:
+      metadata: {name: i, namespace: default}
+      spec: {ingressClassName: gone}
+      status: {loadBalancer: {ingress: [{ip: 1.2.3.4}]}}
+    expect: []
+  - name: no class, default exists
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: i, namespace: default}
+    related:
+      - resource: ingressclasses.networking.k8s.io
+        object: {metadata: {name: nginx, annotations: {ingressclass.kubernetes.io/is-default-class: "true"}}}
+    expect: []
+  - name: no class, no default
+    resource: ingresses.networking.k8s.io
+    available: [ingressclasses.networking.k8s.io]
+    object:
+      metadata: {name: i, namespace: default}
+    expect:
+      - {message: Ingress names no IngressClass and there is no default IngressClass}
+  - name: GKE built-in class
+    resource: ingresses.networking.k8s.io
+    available: [ingressclasses.networking.k8s.io]
+    object:
+      metadata: {name: i, namespace: default}
+      spec: {ingressClassName: gce}
+    expect: []
