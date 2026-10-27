@@ -246,6 +246,30 @@ conditions:
 
 Unlike an ignore rule, a taught condition is still reported when it has its bad status, or a status other than `True`/`False` (e.g. `Unknown`; use `ignoreTypes` for types whose status is something else, like `Accepted`). The rules of the resource are looked at before `"*"`. Taught polarity wins over the built-in polarity tables of `checks/conditions.ts`; its list of known healthy states (specific reasons) still applies. If you replace `conditions.ts` with your own check, it gets the section as param `rules`. `konmon findings --config` applies only `ignore` rules, not `conditions` (stored findings are not evaluated again). If the CRD is public, please [open an issue](https://github.com/guettli/konmon/issues/new) so everybody gets it.
 
+#### Interactive: `konmon triage`
+
+You don't have to write the file by hand. `konmon triage` walks through the open findings, grouped by pattern ("Stalled=True Waiting on 12 widgets"), and writes your answers to the config file (the last `--config`, created if missing, comments kept), after each decision:
+
+```console
+$ konmon triage --context prod --config konmon.yaml
+[1/7] conditions  widgets.example.com  Stalled=True Waiting   (health, warning)
+      12 findings in 4 namespaces, oldest since 216h0m0s
+      e.g. team-a/widget-1: Condition Stalled=True Waiting "Waiting for upstream"
+  t) teach polarity  i) ignore   s) snooze   k) keep (real problem)   ?) details   n) next   q) quit
+> i
+  Ignore which findings?
+  1) only team-a/widget-1                                         hides 1
+  2) these findings in namespace team-a                           hides 3
+  3) these findings everywhere                                    hides 12
+  4) condition Stalled of widgets.example.com, any status and reason  hides 14  (+2 more)
+  5) every conditions finding of widgets.example.com              hides 15  (+3 more)
+  6) every finding of check conditions                            hides 40  (+28 more)
+```
+
+- **t** teaches the polarity (for this resource type or all), **i** ignores with the scope you pick (each with the number of findings it hides), a required comment and an optional expiry. **s** snoozes (an ignore rule with `until`, default 7 days), **k** keeps a real problem (`acknowledged:`, still alerts, not asked again), **?** shows the objects and, with `--from-db`/`--use-db`, the condition history.
+- Same flags as `konmon check` (`-n`, `--category`, check names), or `--from-db` to triage the findings of a running konmon.
+- It never changes the cluster: review the file (`git diff`) and deploy it.
+
 In a cluster, put the file in a ConfigMap and restart konmon on changes (e.g. with [Reloader](https://github.com/stakater/Reloader)).
 
 ### Alerts
