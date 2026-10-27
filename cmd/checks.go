@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 
 	core "github.com/guettli/konmon/checks"
 	"github.com/guettli/konmon/internal/checks"
@@ -137,8 +138,12 @@ konmon repository.`,
 			return err
 		}
 		failed, total := 0, 0
-		run := func(files *checks.Files) {
+		run := func(files *checks.Files, core bool) {
 			for _, p := range files.TestPaths() {
+				if !e.Tested(files.Tests[p], core) {
+					// The core check is disabled or replaced by a user check.
+					continue
+				}
 				for _, r := range e.RunTests(files.Tests[p]) {
 					total++
 					if r.Err != nil {
@@ -148,8 +153,8 @@ konmon repository.`,
 				}
 			}
 		}
-		run(checks.CoreFiles())
-		run(user)
+		run(checks.CoreFiles(), true)
+		run(user, false)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%d of %d test cases passed\n", total-failed, total)
 		if failed > 0 {
 			return fmt.Errorf("%d test cases failed", failed)
@@ -178,4 +183,36 @@ func init() {
 // ones. Types which checks only read stay in memory.
 func storeType(e *checks.Engine) func(schema.GroupResource) bool {
 	return e.Store
+}
+
+// warnUnserved logs resources which checks name in match or reads but the
+// cluster does not serve: usually a typo or a missing group ("deployments"
+// is the core group, which has no deployments; use "deployments.apps").
+func warnUnserved(e *checks.Engine, disc discovery.DiscoveryInterface, log *slog.Logger) {
+	lists, err := discovery.ServerPreferredResources(disc)
+	if err != nil && len(lists) == 0 {
+		return // the watcher reports discovery errors
+	}
+	served := map[schema.GroupResource]struct{}{}
+	for _, l := range lists {
+		gv, err := schema.ParseGroupVersion(l.GroupVersion)
+		if err != nil {
+			continue
+		}
+		for _, r := range l.APIResources {
+			served[schema.GroupResource{Group: gv.Group, Resource: r.Name}] = struct{}{}
+		}
+	}
+	for _, d := range e.Checks() {
+		for _, r := range append(append([]string{}, d.MatchResources...), d.ReadsResources...) {
+			gr, err := checks.ParseResource(r)
+			if err != nil {
+				continue // "*"
+			}
+			if _, ok := served[gr]; !ok {
+				log.Warn("check names a resource the cluster does not serve", "check", d.Name, "resource", r,
+					"hint", "a name without a dot is the core group, e.g. use deployments.apps")
+			}
+		}
+	}
 }

@@ -221,8 +221,12 @@ interface Row {
   since?: Date;
 }
 
+// RFC3339 only, like Go's time.Parse: JavaScript's Date also accepts
+// timestamps without a zone (read as local time).
+const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
 function parseTime(s: string | undefined): Date | undefined {
-  if (!s) return undefined;
+  if (!s || !rfc3339.test(s)) return undefined;
   const d = new Date(s);
   return isNaN(d.getTime()) ? undefined : d;
 }
@@ -325,9 +329,15 @@ export default defineCheck({
       if (r.since && (!g.row.since || r.since < g.row.since)) g.row.since = r.since;
     }
 
+    // Normally the condition types are the key. Some operators write the
+    // same type twice; then status, reason and message keep them apart.
+    const used = new Set<string>();
     return [...groups.values()].map(({ row, types }) => {
       types.sort();
       const condition = types.join("/");
+      let key = condition;
+      if (used.has(key)) key = `${condition} ${row.status} ${row.reason} ${JSON.stringify(row.message)}`;
+      used.add(key);
       let message = `Condition ${condition}=${row.status} ${row.reason} ${JSON.stringify(row.message)}`;
       if (resource === "deployments" && row.reason === "MinimumReplicasUnavailable") {
         const desired = obj.spec?.replicas ?? 1;
@@ -335,7 +345,7 @@ export default defineCheck({
         message += ` available ${available}/${desired}`;
       }
       return {
-        key: condition,
+        key,
         condition,
         message,
         since: row.since,

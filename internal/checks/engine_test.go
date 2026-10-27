@@ -326,3 +326,62 @@ func TestWatchAndStore(t *testing.T) {
 		t.Error("secrets must never be watched")
 	}
 }
+
+func TestContextIsFrozenAndFreshPerCall(t *testing.T) {
+	e, err := Load(nil, []Source{{Path: "test.ts", Code: `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "state",
+  match: { resources: ["pods"] },
+  check(pod, ctx) {
+    const before = ctx.now.toISOString();
+    let frozen = false;
+    try { (ctx as any).leak = 1; } catch (e) { frozen = true; }
+    ctx.now.setFullYear(2000);
+    return [{ message: before + " " + frozen }];
+  },
+});`}}, Options{Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := evaluate(t, e, []Item{pod("a"), pod("b"), pod("c")})
+	for _, f := range res.Findings {
+		if f.Message != "2026-01-01T00:00:00.000Z true" {
+			t.Errorf("%s: %q", f.Name, f.Message)
+		}
+	}
+}
+
+func TestSameErrorForManyObjectsIsOneFinding(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "svc",
+  match: { resources: ["pods"] },
+  reads: ["services"],
+  check(pod, ctx) { ctx.list("services"); return []; },
+});`)
+	res := evaluate(t, e, []Item{pod("a"), pod("b"), pod("c")})
+	if len(res.Failures) != 3 {
+		t.Errorf("want 3 failures (findings of all objects stay open), got %d", len(res.Failures))
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Name != "a" {
+		t.Errorf("want one check-error finding on the first object, got %+v", res.Findings)
+	}
+}
+
+func TestCoreTestsOfReplacedChecksAreSkipped(t *testing.T) {
+	core := CoreFiles()
+	override := `export default { name: "conditions", match: { resources: ["pods"] }, check() { return []; } };`
+	e, err := Load(core.Sources, []Source{{Path: "mine.js", Code: override}}, Options{Disabled: []string{"deletion-timestamp"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range core.TestPaths() {
+		tf := core.Tests[p]
+		want := tf.Check == "pod-container-restarts"
+		if got := e.Tested(tf, true); got != want {
+			t.Errorf("Tested(%s) = %v, want %v", tf.Check, got, want)
+		}
+	}
+}

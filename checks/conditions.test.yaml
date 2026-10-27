@@ -145,3 +145,26 @@ cases:
           - {type: ContainersReady, status: "False", lastTransitionTime: "2026-01-01T00:00:00Z"}
     expect:
       - {condition: ContainersReady}
+
+  - name: the same condition type twice
+    resource: widgets.example.com
+    object:
+      metadata: {name: w, namespace: x}
+      status:
+        conditions:
+          - {type: Foo, status: "False", reason: A}
+          - {type: Foo, status: "False", reason: B}
+    expect:
+      - {key: Foo, condition: Foo}
+      - {key: 'Foo False B ""', condition: Foo}
+
+  - name: a timestamp without zone is not RFC3339
+    resource: pods
+    now: 2026-01-01T00:00:10Z
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        conditions:
+          - {type: ContainersReady, status: "False", lastTransitionTime: "2026-01-01T00:00:00"}
+    expect:
+      - {condition: ContainersReady, since: ""}

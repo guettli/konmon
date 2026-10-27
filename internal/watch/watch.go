@@ -58,9 +58,10 @@ type Watcher struct {
 	Events chan<- any
 	Log    *slog.Logger
 
-	mu        sync.Mutex
-	informers map[schema.GroupResource]*running
-	forbidden map[schema.GroupResource]struct{}
+	mu               sync.Mutex
+	lastDiscoveryErr error
+	informers        map[schema.GroupResource]*running
+	forbidden        map[schema.GroupResource]struct{}
 }
 
 type running struct {
@@ -155,13 +156,27 @@ func (w *Watcher) Available() []schema.GroupVersionResource {
 	return result
 }
 
+// ListResult is the outcome of ListOnce.
+type ListResult struct {
+	Items     []Item
+	Available []schema.GroupVersionResource
+	// Forbidden types may not be listed (RBAC).
+	Forbidden []schema.GroupVersionResource
+	// Failed lists types (or API groups) which could not be listed or
+	// discovered for other reasons.
+	Failed []error
+}
+
 // ListOnce lists all objects of all included types once, without
-// informers, for an ad hoc check. Types which may not be listed are
-// returned as forbidden.
-func (w *Watcher) ListOnce(ctx context.Context) (items []Item, available, forbidden []schema.GroupVersionResource, err error) {
-	gvrs, _, err := w.discover()
-	if err != nil {
-		return nil, nil, nil, err
+// informers, for an ad hoc check.
+func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
+	gvrs, partial, discErr := w.discover()
+	if discErr != nil && !partial {
+		return nil, discErr
+	}
+	res := &ListResult{}
+	if partial {
+		res.Failed = append(res.Failed, w.lastDiscoveryErr)
 	}
 	type result struct {
 		gvr       schema.GroupVersionResource
@@ -199,20 +214,20 @@ func (w *Watcher) ListOnce(ctx context.Context) (items []Item, available, forbid
 	}
 	_ = g.Wait()
 	if err := ctx.Err(); err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	for _, r := range results {
 		switch {
 		case r.forbidden:
-			forbidden = append(forbidden, r.gvr)
+			res.Forbidden = append(res.Forbidden, r.gvr)
 		case r.err != nil:
-			w.Log.Warn("cannot list resource, skipping", "err", r.err)
+			res.Failed = append(res.Failed, r.err)
 		default:
-			items = append(items, r.items...)
-			available = append(available, r.gvr)
+			res.Items = append(res.Items, r.items...)
+			res.Available = append(res.Available, r.gvr)
 		}
 	}
-	return items, available, forbidden, nil
+	return res, nil
 }
 
 func (w *Watcher) refresh(ctx context.Context) error {
@@ -291,6 +306,7 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partial bool, 
 		}
 		// Some API groups (often an orphaned APIService) failed. Go on with the rest.
 		w.Log.Warn("partial discovery", "err", err)
+		w.lastDiscoveryErr = fmt.Errorf("discovery: %w", err)
 		partial = true
 	}
 	for _, list := range lists {

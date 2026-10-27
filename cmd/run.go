@@ -192,6 +192,7 @@ func run(ctx context.Context) error {
 		Log:            log,
 	}, st, watcher, notifier)
 
+	warnUnserved(engine, disc, log)
 	names := make([]string, 0, len(engine.Checks()))
 	for _, d := range engine.Checks() {
 		names = append(names, d.Name)

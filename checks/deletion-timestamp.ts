@@ -27,14 +27,17 @@ export default defineCheck({
   },
   params: {
     // Report an object when its deletionTimestamp is older than this.
+    // 0 disables the check.
     olderThanSeconds: 600,
   },
   check(obj, ctx) {
+    const olderThan = ctx.params.olderThanSeconds;
+    if (olderThan <= 0) return [];
     const ts = obj.metadata.deletionTimestamp;
-    if (!ts) return [];
+    if (!ts || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(ts)) return [];
     const since = new Date(ts);
     if (isNaN(since.getTime())) return [];
-    if (ctx.now.getTime() - since.getTime() <= ctx.params.olderThanSeconds * 1000) return [];
+    if (ctx.now.getTime() - since.getTime() <= olderThan * 1000) return [];
     const finalizers = obj.metadata.finalizers ?? [];
     return [
       {

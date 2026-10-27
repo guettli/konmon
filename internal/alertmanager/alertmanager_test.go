@@ -36,7 +36,13 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 		Details: map[string]string{"reason": "MinimumReplicasUnavailable"},
 	}
 	firing := []store.FindingRow{{Finding: f, FirstSeen: now.Add(-5 * time.Minute)}}
-	resolved := []store.FindingRow{{Finding: f, FirstSeen: now.Add(-time.Hour), ResolvedAt: now.Add(-time.Minute)}}
+	g := f
+	g.Name = "api"
+	resolved := []store.FindingRow{
+		{Finding: g, FirstSeen: now.Add(-time.Hour), ResolvedAt: now.Add(-time.Minute)},
+		// Same labels as the firing alert (recreated object): dropped.
+		{Finding: f, FirstSeen: now.Add(-time.Hour), ResolvedAt: now.Add(-time.Minute)},
+	}
 
 	c := &Client{
 		URLs:           []string{srv.URL + "/"},
@@ -63,8 +69,8 @@ func TestNotifyPostsFiringResolvedAndWatchdog(t *testing.T) {
 	if !a.EndsAt.Equal(now.Add(2 * time.Minute)) {
 		t.Errorf("firing endsAt = %s", a.EndsAt)
 	}
-	if _, ok := a.Labels["key"]; ok {
-		t.Error("key label is only set when condition and container are empty")
+	if a.Labels["key"] != "Available" {
+		t.Errorf("key label = %q", a.Labels["key"])
 	}
 	if a.Annotations["reason"] != "MinimumReplicasUnavailable" || !strings.HasPrefix(a.Annotations["summary"], "ns deployments web Condition") {
 		t.Errorf("annotations = %v", a.Annotations)

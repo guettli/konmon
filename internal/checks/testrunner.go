@@ -77,6 +77,17 @@ type TestResult struct {
 
 var defaultTestNow = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// Tested reports whether RunTests applies to a test file: its check is
+// enabled and, for a test of a core check, not replaced by a user check.
+func (e *Engine) Tested(tf *TestFile, core bool) bool {
+	for _, d := range e.defs {
+		if d.Name == tf.Check {
+			return !core || d.Core
+		}
+	}
+	return !core
+}
+
 // RunTests runs the cases of a test file against the check of that name.
 func (e *Engine) RunTests(tf *TestFile) []TestResult {
 	var def *Definition

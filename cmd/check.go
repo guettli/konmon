@@ -82,12 +82,14 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 	defer stop()
 
 	w := &watch.Watcher{Dynamic: dyn, Discovery: disc, Include: engine.Watch, Log: log}
-	items, available, forbidden, err := w.ListOnce(ctx)
+	warnUnserved(engine, disc, log)
+	listed, err := w.ListOnce(ctx)
 	if err != nil {
 		return err
 	}
+	available, forbidden := listed.Available, listed.Forbidden
 	var snapItems []checks.Item
-	for _, it := range items {
+	for _, it := range listed.Items {
 		if ns := it.Obj.GetNamespace(); ns != "" && matchGlob(ns, checkOpts.checks.excludeNamespaces) {
 			continue
 		}
@@ -142,10 +144,17 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 		sort.Strings(names)
 		_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", strings.Join(names, ", "))
 	}
+	for _, err := range listed.Failed {
+		_, _ = fmt.Fprintf(out, "Not checked: %v\n", err)
+	}
 	_, _ = fmt.Fprintf(out, "Checked %d objects of %d types with %d checks in %s: %d findings.\n",
 		res.Objects, len(available), len(engine.Checks()), time.Since(now).Round(time.Millisecond), len(lines))
 	if health > 0 {
 		return errFindings
+	}
+	if len(listed.Failed) > 0 {
+		// Do not report "healthy" for a cluster which was only partly checked.
+		return fmt.Errorf("%d resource types or API groups could not be listed", len(listed.Failed))
 	}
 	return nil
 }

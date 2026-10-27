@@ -319,7 +319,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		}
 		hist = StoreHistory(rows)
 	}
-	res, err := m.cfg.Checks.Evaluate(ctx, checks.NewSnapshot(items, m.source.Available()), hist, now)
+	// A slow check must not stall the event loop: Evaluate runs in it. An
+	// aborted evaluation changes no findings.
+	evalCtx, cancel := context.WithTimeout(ctx, m.cfg.EvalInterval)
+	res, err := m.cfg.Checks.Evaluate(evalCtx, checks.NewSnapshot(items, m.source.Available()), hist, now)
+	cancel()
 	if err != nil {
 		return err
 	}

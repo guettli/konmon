@@ -26,3 +26,11 @@ cases:
     object:
       metadata: {name: p, namespace: default}
     expect: []
+
+  - name: disabled
+    resource: persistentvolumeclaims
+    now: 2026-01-01T01:00:00Z
+    params: {olderThanSeconds: 0}
+    object:
+      metadata: {name: data, namespace: default, deletionTimestamp: "2026-01-01T00:00:00Z"}
+    expect: []

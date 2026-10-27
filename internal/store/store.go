@@ -21,7 +21,7 @@ import (
 	"github.com/guettli/konmon/internal/checks"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 const schemaSQL = `
 CREATE TABLE objects (
@@ -128,6 +128,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	switch {
 	case version == schemaVersion:
 		return nil
+	case version == 1:
+		// Version 1 was only used before the first release, with
+		// check-conditions findings.
+		return errors.New("database schema version 1 is from a development version of konmon: delete the database file")
 	case version > schemaVersion:
 		return fmt.Errorf("database schema version %d is newer than this konmon (%d)", version, schemaVersion)
 	}

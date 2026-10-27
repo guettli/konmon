@@ -47,7 +47,10 @@ type jsRuntime struct {
 type loadedCheck struct {
 	def *Definition
 	fn  goja.Callable
-	ctx *goja.Object
+	// base holds the functions of ctx; each call gets a fresh, frozen ctx
+	// with base as prototype, so a check cannot leave state for the next
+	// object (which may run in another runtime).
+	base *goja.Object
 }
 
 var errTimeout = errors.New("timeout")
@@ -108,15 +111,33 @@ func (rt *jsRuntime) log(call goja.FunctionCall) goja.Value {
 func (rt *jsRuntime) begin(snap *Snapshot, hist History, now time.Time) {
 	rt.snap, rt.hist, rt.now = snap, hist, now
 	for _, lc := range rt.checks {
-		lc.ctx = rt.newContext(lc)
+		lc.base = rt.newContextBase(lc)
 	}
 }
 
-func (rt *jsRuntime) newContext(lc *loadedCheck) *goja.Object {
+func (rt *jsRuntime) freeze(o *goja.Object) {
+	freeze, _ := goja.AssertFunction(rt.vm.Get("Object").ToObject(rt.vm).Get("freeze"))
+	if _, err := freeze(goja.Undefined(), o); err != nil {
+		panic(err)
+	}
+}
+
+// callContext is the ctx argument of one call.
+func (rt *jsRuntime) callContext(lc *loadedCheck, resource *goja.Object) *goja.Object {
 	vm := rt.vm
 	ctx := vm.NewObject()
-	nowVal, _ := vm.New(vm.Get("Date"), vm.ToValue(rt.now.UnixMilli()))
+	must(ctx.SetPrototype(lc.base))
+	nowVal, err := vm.New(vm.Get("Date"), vm.ToValue(rt.now.UnixMilli()))
+	must(err)
 	must(ctx.Set("now", nowVal))
+	must(ctx.Set("resource", resource))
+	rt.freeze(ctx)
+	return ctx
+}
+
+func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
+	vm := rt.vm
+	ctx := vm.NewObject()
 	must(ctx.Set("params", wrap(vm, lc.def.Params)))
 	must(ctx.Set("has", func(resource string) bool {
 		gr := rt.resource(lc, resource)
@@ -178,8 +199,10 @@ func (rt *jsRuntime) newContext(lc *loadedCheck) *goja.Object {
 		}
 		return vm.NewArray(vals...)
 	}))
+	rt.freeze(history)
 	must(ctx.Set("history", history))
 	must(ctx.Set("log", rt.log))
+	rt.freeze(ctx)
 	return ctx
 }
 
@@ -260,10 +283,10 @@ func (rt *jsRuntime) run(t task) taskResult {
 	must(resource.Set("group", t.item.GVR.Group))
 	must(resource.Set("version", t.item.GVR.Version))
 	must(resource.Set("resource", t.item.GVR.Resource))
+	rt.freeze(resource)
 	for _, d := range t.defs {
 		lc := rt.byName[d.Name]
-		must(lc.ctx.Set("resource", resource))
-		findings, err := rt.call(lc, obj, t.item)
+		findings, err := rt.call(lc, obj, rt.callContext(lc, resource), t.item)
 		res.calls++
 		if err != nil {
 			uid := string(t.item.Obj.GetUID())
@@ -276,7 +299,7 @@ func (rt *jsRuntime) run(t task) taskResult {
 	return res
 }
 
-func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, item Item) (findings []Finding, err error) {
+func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, ctx *goja.Object, item Item) (findings []Finding, err error) {
 	rt.current = lc
 	rt.rand = 0x9E3779B97F4A7C15
 	// A timer which fires just after the call ended must not interrupt the
@@ -301,7 +324,7 @@ func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, item Item) (findings 
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	v, err := lc.fn(goja.Undefined(), obj, lc.ctx)
+	v, err := lc.fn(goja.Undefined(), obj, ctx)
 	if err != nil {
 		var ie *goja.InterruptedError
 		if errors.As(err, &ie) {

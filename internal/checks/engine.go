@@ -240,8 +240,21 @@ feed:
 	}
 
 	res := &Result{Objects: len(tasks), Duration: time.Since(start)}
+	// A check which fails the same way for many objects (e.g. a type in
+	// reads is forbidden) gets one check-error finding, on the first
+	// object, not one alert per object.
+	errorSeen := map[string]bool{}
 	for i := range results {
-		res.Findings = append(res.Findings, results[i].findings...)
+		for _, f := range results[i].findings {
+			if f.Check == ErrorCheck {
+				k := f.Key + "\x00" + f.Message
+				if errorSeen[k] {
+					continue
+				}
+				errorSeen[k] = true
+			}
+			res.Findings = append(res.Findings, f)
+		}
 		res.Failures = append(res.Failures, results[i].failures...)
 		res.Calls += results[i].calls
 	}

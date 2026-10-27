@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,4 +257,19 @@ func TestPrune(t *testing.T) {
 		}
 		return err
 	})
+}
+
+func TestOpenRefusesDevelopmentSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(context.Background(), "PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if _, err := Open(context.Background(), path); err == nil || !strings.Contains(err.Error(), "development version") {
+		t.Errorf("want an error for schema version 1, got %v", err)
+	}
 }
