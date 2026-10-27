@@ -22,6 +22,9 @@ import (
 // Config is the content of one or more config files.
 type Config struct {
 	Ignore []*IgnoreRule `yaml:"ignore"`
+	// Acknowledged are real problems somebody looked at: they are still
+	// reported, but 'konmon triage' does not ask about them again.
+	Acknowledged []*IgnoreRule `yaml:"acknowledged"`
 	// Conditions teaches the conditions check which status of a condition
 	// type is healthy, by resource type ("resource.group", a bare name is
 	// the core group, "*" any resource).
@@ -74,6 +77,7 @@ func Load(paths []string) (*Config, error) {
 			return nil, err
 		}
 		cfg.Ignore = append(cfg.Ignore, c.Ignore...)
+		cfg.Acknowledged = append(cfg.Acknowledged, c.Acknowledged...)
 		for resource, r := range c.Conditions {
 			if cfg.Conditions == nil {
 				cfg.Conditions = map[string]*ConditionRules{}
@@ -129,13 +133,18 @@ func Parse(data []byte, name string) (*Config, error) {
 		conditions[resource] = r
 	}
 	cfg.Conditions = conditions
-	for i, r := range cfg.Ignore {
-		if r == nil {
-			return nil, fmt.Errorf("%s: ignore[%d] is empty", name, i)
-		}
-		r.Source = fmt.Sprintf("%s:ignore[%d]", name, i)
-		if err := r.compile(); err != nil {
-			return nil, fmt.Errorf("%s: %w", r.Source, err)
+	for _, list := range []struct {
+		name  string
+		rules []*IgnoreRule
+	}{{"ignore", cfg.Ignore}, {"acknowledged", cfg.Acknowledged}} {
+		for i, r := range list.rules {
+			if r == nil {
+				return nil, fmt.Errorf("%s: %s[%d] is empty", name, list.name, i)
+			}
+			r.Source = fmt.Sprintf("%s:%s[%d]", name, list.name, i)
+			if err := r.Compile(); err != nil {
+				return nil, fmt.Errorf("%s: %w", r.Source, err)
+			}
 		}
 	}
 	return cfg, nil
@@ -163,7 +172,9 @@ func (r *ConditionRules) validate() error {
 	return nil
 }
 
-func (r *IgnoreRule) compile() error {
+// Compile checks the rule and prepares it for Match. Parse calls it; call
+// it for a rule which is built in code.
+func (r *IgnoreRule) Compile() error {
 	globs := map[string]string{
 		"check": r.Check, "resource": r.Resource, "namespace": r.Namespace, "name": r.Name,
 		"condition": r.Condition, "container": r.Container, "key": r.Key,
@@ -263,6 +274,17 @@ func glob(pattern, s string) bool {
 // Ignored returns the first rule which drops the finding, or nil.
 func (c *Config) Ignored(f *checks.Finding, now time.Time) *IgnoreRule {
 	for _, r := range c.Ignore {
+		if r.Match(f, now) {
+			return r
+		}
+	}
+	return nil
+}
+
+// IsAcknowledged returns the acknowledged rule which matches the finding,
+// or nil.
+func (c *Config) IsAcknowledged(f *checks.Finding, now time.Time) *IgnoreRule {
+	for _, r := range c.Acknowledged {
 		if r.Match(f, now) {
 			return r
 		}

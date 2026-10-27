@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/checks"
@@ -19,13 +20,25 @@ import (
 	"github.com/guettli/konmon/internal/watch"
 )
 
-var checkOpts struct {
+// checkOptions are the flags of commands which list the cluster once and
+// run the checks: check and triage.
+type checkOptions struct {
 	kube          kubeFlags
 	checks        checkFlags
 	filter        findingFilter
 	useDB         bool
 	historyWindow time.Duration
 }
+
+func (o *checkOptions) register(f *pflag.FlagSet) {
+	o.kube.register(f)
+	o.checks.register(f)
+	o.filter.register(f)
+	f.BoolVar(&o.useDB, "use-db", false, "Read condition history for checks from --db.")
+	f.DurationVar(&o.historyWindow, "history-window", 24*time.Hour, "How much condition history checks can see.")
+}
+
+var checkOpts checkOptions
 
 // exitError ends konmon with a code, without printing an error.
 type exitError int
@@ -74,49 +87,54 @@ Examples:
 }
 
 func init() {
-	f := checkCmd.Flags()
-	checkOpts.kube.register(f)
-	checkOpts.checks.register(f)
-	checkOpts.filter.register(f)
-	f.BoolVar(&checkOpts.useDB, "use-db", false, "Read condition history for checks from --db.")
-	f.DurationVar(&checkOpts.historyWindow, "history-window", 24*time.Hour, "How much condition history checks can see.")
+	checkOpts.register(checkCmd.Flags())
 	rootCmd.AddCommand(checkCmd)
 }
 
-func check(ctx context.Context, cmd *cobra.Command, only []string) error {
-	if err := checkOpts.filter.validate(); err != nil {
-		return err
+// checkRun is the result of listing the cluster once and running the checks.
+type checkRun struct {
+	engine    *checks.Engine
+	ignore    *ignorer
+	listed    *watch.ListResult
+	result    *checks.Result
+	available int
+	now       time.Time
+	// findings pass the filter and are not ignored.
+	findings []*checks.Finding
+	ignored  int
+}
+
+// runChecks lists the cluster and runs the checks, like 'konmon check'.
+func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, error) {
+	if err := o.filter.validate(); err != nil {
+		return nil, err
 	}
 	log, err := newLogger()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	klog.SetSlogLogger(log)
-	engine, _, err := checkOpts.checks.engine(log, only, checkOpts.filter.categories)
+	engine, _, err := o.checks.engine(log, only, o.filter.categories)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	ignore, err := checkOpts.checks.ignorer()
+	ignore, err := o.checks.ignorer()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, dyn, disc, err := checkOpts.kube.clients()
+	_, dyn, disc, err := o.kube.clients()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	w := &watch.Watcher{Dynamic: dyn, Discovery: disc, Include: engine.Watch, Log: log}
 	warnUnserved(engine, disc, log)
 	listed, err := w.ListOnce(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	available, forbidden := listed.Available, listed.Forbidden
 	var snapItems []checks.Item
 	for _, it := range listed.Items {
-		if ns := it.Obj.GetNamespace(); ns != "" && matchGlob(ns, checkOpts.checks.excludeNamespaces) {
+		if ns := it.Obj.GetNamespace(); ns != "" && matchGlob(ns, o.checks.excludeNamespaces) {
 			continue
 		}
 		snapItems = append(snapItems, checks.Item{GVR: it.GVR, Obj: it.Obj})
@@ -125,38 +143,54 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	var hist checks.History
 	now := time.Now()
 	if engine.UsesHistory() {
-		if !checkOpts.useDB {
+		if !o.useDB {
 			log.Warn("some checks use condition history; without --use-db they fail")
 		} else {
 			st, err := store.OpenExisting(ctx, dbPath)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			defer func() { _ = st.Close() }()
-			rows, err := st.ConditionHistorySince(ctx, now.Add(-checkOpts.historyWindow))
+			rows, err := st.ConditionHistorySince(ctx, now.Add(-o.historyWindow))
 			if err != nil {
-				return err
+				return nil, err
 			}
 			hist = monitor.StoreHistory(rows)
 		}
 	}
 
-	res, err := engine.Evaluate(ctx, checks.NewSnapshot(snapItems, available), hist, now)
+	res, err := engine.Evaluate(ctx, checks.NewSnapshot(snapItems, listed.Available), hist, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ignore.warnExpired(log, now)
-	var shown []shownFinding
-	ignored := 0
+	run := &checkRun{engine: engine, ignore: ignore, listed: listed, result: res, available: len(listed.Available), now: now}
 	for i := range res.Findings {
 		f := &res.Findings[i]
-		if !checkOpts.filter.match(f) {
+		if !o.filter.match(f) {
 			continue
 		}
 		if ignore.ignored(f, now) != "" {
-			ignored++
+			run.ignored++
 			continue
 		}
+		run.findings = append(run.findings, f)
+	}
+	return run, nil
+}
+
+func check(ctx context.Context, cmd *cobra.Command, only []string) error {
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	run, err := runChecks(ctx, &checkOpts, only)
+	if err != nil {
+		return err
+	}
+	engine, res, listed, now, ignored := run.engine, run.result, run.listed, run.now, run.ignored
+	forbidden := listed.Forbidden
+	available := listed.Available
+	shown := make([]shownFinding, 0, len(run.findings))
+	for _, f := range run.findings {
 		shown = append(shown, shownFinding{f, f.Line(now)})
 	}
 	notAllowed := make([]string, 0, len(forbidden))
