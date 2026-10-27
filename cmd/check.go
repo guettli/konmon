@@ -235,7 +235,8 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 			plural(res.Objects, "object"), plural(len(available), "type"), plural(len(engine.Checks()), "check"), took.Round(time.Millisecond),
 			checkOpts.filter.countText(health, hygiene)+ignoredText(ignored))
 		if slices.ContainsFunc(shown, func(s shownFinding) bool { return s.finding.Check == "conditions" }) {
-			_, _ = fmt.Fprintln(out, "A finding is wrong? 'konmon triage' fixes it in your config; 'konmon report false-positive' tells the maintainers.")
+			// stderr: not part of the output which scripts read.
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "A finding is wrong? 'konmon triage' fixes it in your config; 'konmon report false-positive' tells the maintainers.")
 		}
 	}
 	if health > 0 {

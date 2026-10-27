@@ -271,8 +271,9 @@ type triageSession struct {
 	// narrowed: only some checks ran, the counts may be too low.
 	narrowed bool
 	now      time.Time
-	store    *store.Store // nil: no history
-	hist     *historyData // nil: no history
+	store    *store.Store    // nil: no history
+	reported map[string]bool // resource types for which the report link was shown
+	hist     *historyData    // nil: no history
 	changes  int
 }
 
@@ -472,11 +473,16 @@ func (t *triageSession) teach(g *triageGroup) (bool, error) {
 	if (list == config.HealthyWhenTrue && g.status == "False") || (list == config.HealthyWhenFalse && g.status == "True") {
 		t.printf("  Note: the current status %s is unhealthy by this rule, these findings stay.\n", g.status)
 	}
-	if strings.Contains(g.resource, ".") && !strings.HasSuffix(g.resource, ".k8s.io") {
-		// A custom resource: if it is public, everybody should get the rule.
-		rule := fmt.Sprintf("conditions:\n  %s:\n    %s: [%s]\n", g.resource, list, strings.Join(types, ", "))
-		t.printf("  If %s is a public CRD, please tell the maintainers of konmon, so everybody gets this rule\n"+
-			"  (nothing is sent, you edit it before you submit):\n  %s\n",
+	if _, group, _ := strings.Cut(g.resource, "."); !builtinGroups[group] && !t.reported[g.resource] {
+		// Not a Kubernetes API: if the project is public, everybody should
+		// get the rule. Once per resource type.
+		if t.reported == nil {
+			t.reported = map[string]bool{}
+		}
+		t.reported[g.resource] = true
+		rule := fmt.Sprintf("conditions:\n  %s:\n    %s: [%s]\n", resource, list, strings.Join(types, ", "))
+		t.printf("  If %s comes from a public project, please tell the maintainers of konmon, so everybody\n"+
+			"  gets this rule (nothing is sent, you edit it before you submit):\n  %s\n",
 			g.resource, falsePositiveURL(g.check, g.resource, g.condition, g.status, g.reason, rule))
 	}
 	return true, nil
@@ -776,4 +782,16 @@ func upperFirst(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// builtinGroups are the API groups of Kubernetes itself: their conditions
+// are not reported upstream by triage ("" is the core group).
+var builtinGroups = map[string]bool{
+	"": true, "apps": true, "batch": true, "autoscaling": true, "policy": true,
+	"admissionregistration.k8s.io": true, "apiextensions.k8s.io": true, "apiregistration.k8s.io": true,
+	"authentication.k8s.io": true, "authorization.k8s.io": true, "certificates.k8s.io": true,
+	"coordination.k8s.io": true, "discovery.k8s.io": true, "events.k8s.io": true,
+	"flowcontrol.apiserver.k8s.io": true, "internal.apiserver.k8s.io": true, "networking.k8s.io": true,
+	"node.k8s.io": true, "rbac.authorization.k8s.io": true, "resource.k8s.io": true,
+	"scheduling.k8s.io": true, "storage.k8s.io": true, "storagemigration.k8s.io": true,
 }

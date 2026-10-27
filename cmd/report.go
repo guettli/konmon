@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -48,7 +47,8 @@ var reportFalsePositiveCmd = &cobra.Command{
 		if o.check == "" || o.resource == "" {
 			return errors.New("--check and --resource are required")
 		}
-		return printReport(cmd.Context(), cmd.OutOrStdout(), falsePositiveURL(o.check, o.resource, o.condition, o.status, o.reason, o.rule), o.open)
+		printReport(cmd.OutOrStdout(), falsePositiveURL(o.check, o.resource, o.condition, o.status, o.reason, o.rule), o.open)
+		return nil
 	},
 }
 
@@ -57,7 +57,8 @@ var reportCheckIdeaCmd = &cobra.Command{
 	Short: "Suggest something konmon should detect",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return printReport(cmd.Context(), cmd.OutOrStdout(), issueURL("check-idea.yml", "Check idea: "+reportOpts.title, nil), reportOpts.open)
+		printReport(cmd.OutOrStdout(), issueURL("check-idea.yml", "Check idea: "+reportOpts.title, nil), reportOpts.open)
+		return nil
 	},
 }
 
@@ -66,7 +67,8 @@ var reportBugCmd = &cobra.Command{
 	Short: "Report a bug",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return printReport(cmd.Context(), cmd.OutOrStdout(), issueURL("bug.yml", "Bug: "+reportOpts.title, nil), reportOpts.open)
+		printReport(cmd.OutOrStdout(), issueURL("bug.yml", "Bug: "+reportOpts.title, nil), reportOpts.open)
+		return nil
 	},
 }
 
@@ -114,15 +116,23 @@ func falsePositiveURL(check, resource, condition, status, reason, rule string) s
 	if finding != "" {
 		title += " " + finding
 	}
-	return issueURL("false-positive.yml", title, map[string]string{
-		"check": check, "resource": resource, "finding": strings.TrimSpace(finding), "rule": rule,
-	})
+	fields := map[string]string{"check": check, "resource": resource, "finding": strings.TrimSpace(finding), "rule": rule}
+	link := issueURL("false-positive.yml", title, fields)
+	if len(link) > maxURL {
+		// GitHub refuses long URLs (414): the rule is pasted by hand.
+		fields["rule"] = "(too long for the link, please paste your rule here)"
+		link = issueURL("false-positive.yml", title, fields)
+	}
+	return link
 }
 
-func printReport(ctx context.Context, w io.Writer, link string, open bool) error {
+// maxURL is below the limit of GitHub for URLs (about 8 KB).
+const maxURL = 6000
+
+func printReport(w io.Writer, link string, open bool) {
 	_, _ = fmt.Fprintf(w, "Open this link, check and edit the text, then submit:\n\n  %s\n", link)
 	if !open {
-		return nil
+		return
 	}
 	name, args := "xdg-open", []string{link}
 	switch runtime.GOOS {
@@ -131,8 +141,8 @@ func printReport(ctx context.Context, w io.Writer, link string, open bool) error
 	case "windows":
 		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", link}
 	}
-	if err := exec.CommandContext(ctx, name, args...).Start(); err != nil {
-		return fmt.Errorf("open the browser: %w", err)
+	// Not CommandContext: the browser must outlive konmon.
+	if err := exec.Command(name, args...).Start(); err != nil { //nolint:noctx // see above
+		_, _ = fmt.Fprintf(w, "\nCould not open a browser (%v): copy the link.\n", err)
 	}
-	return nil
 }

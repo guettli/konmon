@@ -7,6 +7,8 @@ body:
     id: version
     attributes:
       label: konmon version
+    validations:
+      required: true
   - type: textarea
     id: idea
     attributes:

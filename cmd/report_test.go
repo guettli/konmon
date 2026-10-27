@@ -7,10 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestReportFalsePositive(t *testing.T) {
-	reportOpts.open = false
+	t.Cleanup(func() {
+		reportOpts = struct {
+			open                                                    bool
+			check, resource, condition, status, reason, rule, title string
+		}{}
+	})
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 	rootCmd.SetArgs([]string{
@@ -49,20 +56,52 @@ func TestReportFalsePositive(t *testing.T) {
 	}
 }
 
-func TestReportFormsExist(t *testing.T) {
-	for _, name := range []string{"false-positive.yml", "check-idea.yml", "bug.yml"} {
+func TestReportForms(t *testing.T) {
+	// The fields falsePositiveURL fills must exist in the form; every form
+	// needs the keys GitHub requires and unique ids.
+	wantIDs := map[string][]string{
+		"false-positive.yml": {"version", "check", "resource", "finding", "rule"},
+		"check-idea.yml":     {"version"},
+		"bug.yml":            {"version"},
+	}
+	for name, ids := range wantIDs {
 		data, err := readRepoFile(".github/ISSUE_TEMPLATE/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if name == "false-positive.yml" {
-			// The ids which falsePositiveURL fills must exist in the form.
-			for _, id := range []string{"version", "check", "resource", "finding", "rule"} {
-				if !strings.Contains(string(data), "id: "+id+"\n") {
-					t.Errorf("%s has no field id %s", name, id)
-				}
+		var form struct {
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+			Body        []struct {
+				Type string `yaml:"type"`
+				ID   string `yaml:"id"`
+			} `yaml:"body"`
+		}
+		if err := yaml.Unmarshal(data, &form); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if form.Name == "" || form.Description == "" || len(form.Body) == 0 {
+			t.Errorf("%s: name, description and body are required", name)
+		}
+		seen := map[string]bool{}
+		for _, b := range form.Body {
+			if b.ID != "" && seen[b.ID] {
+				t.Errorf("%s: duplicate id %s", name, b.ID)
+			}
+			seen[b.ID] = true
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				t.Errorf("%s has no field id %s", name, id)
 			}
 		}
+	}
+}
+
+func TestReportLongRule(t *testing.T) {
+	link := falsePositiveURL("conditions", "widgets.example.com", "Stalled", "True", "Waiting", strings.Repeat("x", 10000))
+	if len(link) > maxURL || !strings.Contains(link, "too+long") {
+		t.Errorf("long rule: %d bytes", len(link))
 	}
 }
 
