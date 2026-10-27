@@ -161,9 +161,22 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 	}
 	stop()
 
+	var hist *historyData
+	if st != nil {
+		resources := map[string]bool{}
+		for _, f := range findings {
+			if f.Check == "conditions" {
+				resources[findingResource(f)] = true
+			}
+		}
+		if hist, err = loadHistory(ctx, st, resources, now.Add(-triageOpts.historyWindow)); err != nil {
+			return err
+		}
+	}
+
 	t := &triageSession{
 		in: bufio.NewReader(cmd.InOrStdin()), out: cmd.OutOrStdout(),
-		editor: editor, base: base, all: findings, universe: universe, now: now, store: st, ctx: ctx,
+		editor: editor, base: base, all: findings, universe: universe, now: now, store: st, hist: hist, ctx: ctx,
 		narrowed: len(only) > 0 || len(triageOpts.filter.categories) > 0,
 	}
 	if triageBaseline {
@@ -177,6 +190,7 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 type triageGroup struct {
 	check, resource, condition, status, reason string
 	findings                                   []*checks.Finding
+	ev                                         evidence // from the history, if known
 }
 
 func (g *triageGroup) category() string { return g.findings[0].Category }
@@ -195,7 +209,9 @@ func (g *triageGroup) title() string {
 	return s
 }
 
-func groupFindings(findings []*checks.Finding) []*triageGroup {
+// groupFindings groups the findings. hist (may be nil) ranks likely false
+// positives first within a category.
+func groupFindings(findings []*checks.Finding, hist *historyData, now time.Time) []*triageGroup {
 	byKey := map[string]*triageGroup{}
 	var groups []*triageGroup
 	for _, f := range findings {
@@ -212,9 +228,13 @@ func groupFindings(findings []*checks.Finding) []*triageGroup {
 		}
 		g.findings = append(g.findings, f)
 	}
+	for _, g := range groups {
+		g.ev = hist.assess(g, now)
+	}
 	slices.SortFunc(groups, func(a, b *triageGroup) int {
 		return cmp.Or(
 			cmp.Compare(categoryRank(a.category()), categoryRank(b.category())),
+			cmp.Compare(verdictRank(a.ev.verdict), verdictRank(b.ev.verdict)),
 			cmp.Compare(len(b.findings), len(a.findings)),
 			cmp.Compare(a.title(), b.title()),
 		)
@@ -252,6 +272,7 @@ type triageSession struct {
 	narrowed bool
 	now      time.Time
 	store    *store.Store // nil: no history
+	hist     *historyData // nil: no history
 	changes  int
 }
 
@@ -272,12 +293,15 @@ func (t *triageSession) ask(prompt string) (string, error) {
 }
 
 func (t *triageSession) run() error {
-	groups := groupFindings(t.all)
+	groups := groupFindings(t.all, t.hist, t.now)
 	if len(groups) == 0 {
 		t.printf("No findings to triage.\n")
 		return nil
 	}
-	t.printf("%s in %d groups. Answers are saved to %s after each decision.\n", plural(len(t.all), "finding"), len(groups), t.editor.Path())
+	t.printf("%s in %s. Answers are saved to %s after each decision.\n", plural(len(t.all), "finding"), plural(len(groups), "group"), t.editor.Path())
+	if t.hist == nil {
+		t.printf("Tip: with --from-db or --use-db, the condition history ranks likely false positives first.\n")
+	}
 	for i, g := range groups {
 		cfg, err := t.editor.Config()
 		if err != nil {
@@ -358,9 +382,17 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 		where += " in " + plural(len(namespaces), "namespace")
 	}
 	if !oldest.IsZero() {
-		where += ", oldest since " + t.now.Sub(oldest).Round(time.Minute).String()
+		where += ", the oldest for " + roundDuration(t.now.Sub(oldest))
 	}
 	t.printf("      %s\n      e.g. %s: %s\n", where, findingObject(g.findings[0]), g.findings[0].Message)
+	if g.ev.verdict != "" {
+		hint := map[string]string{
+			verdictFalsePositive: "teach the polarity (t)",
+			verdictInformational: "teach it as informational (t, then b)",
+			verdictReal:          "keep it (k)",
+		}[g.ev.verdict]
+		t.printf("      history: %s: %s. Suggestion: %s.\n", g.ev.verdict, g.ev.reason, hint)
+	}
 
 	canTeach := g.check == "conditions" && g.condition != ""
 	options := "  i) ignore   s) snooze   k) keep (real problem)   ?) details   n) next   q) quit\n> "
