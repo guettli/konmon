@@ -253,7 +253,8 @@ You don't have to write the file by hand. `konmon triage` walks through the open
 ```console
 $ konmon triage --context prod --config konmon.yaml
 [1/7] conditions  widgets.example.com  Stalled=True Waiting   (health, warning)
-      12 findings in 4 namespaces, oldest since 216h0m0s
+      12 findings in 4 namespaces, the oldest for 9d
+      history: possibly normal for this type: Stalled=True on all 12 objects of widgets.example.com for at least 9d, all of them Ready=True. Suggestion: if that is right for this type, teach the polarity (t).
       e.g. team-a/widget-1: Condition Stalled=True Waiting "Waiting for upstream"
   t) teach polarity  i) ignore   s) snooze   k) keep (real problem)   ?) details   n) next   q) quit
 > i
@@ -268,6 +269,12 @@ $ konmon triage --context prod --config konmon.yaml
 
 - **t** teaches the polarity (for this resource type or all), **i** ignores with the scope you pick (each with the number of findings it hides), a required comment and an optional expiry. **s** snoozes (an ignore rule with `until`, default 7 days), **k** keeps a real problem (`acknowledged:`, still alerts, not asked again), **?** shows the objects and, with `--from-db`/`--use-db`, the condition history.
 - Same flags as `konmon check` (`-n`, `--category`, check names), or `--from-db` to triage the findings of a running konmon.
+- With history (`--from-db`, or `--use-db` for a live run), triage ranks condition findings and says why. It is deliberately cautious, it only hints:
+  - **possibly normal for this type**: at least 2 objects, every object of the type has this status (not `Unknown`) since more than a day, and all of them are `Ready=True`;
+  - **possibly informational**: it flips often while `Ready` stays `True` the whole time;
+  - **likely real**: `Ready` became unhealthy within 10 minutes after it. These come last.
+
+  It cannot know whether `Ready` of the type summarises the condition: check before you teach.
 - It never changes the cluster: review the file (`git diff`) and deploy it.
 
 **Baseline.** On a cluster with many findings on day one, `konmon triage --baseline` writes one narrow ignore rule (this object) per open finding without asking, expiring after `--baseline-until` (default 90 days). The cluster is quiet now, only new problems are reported, and the expiry brings the old ones back for a real triage. Running it again adds only new findings (also the ones whose baseline rule expired: triage them interactively instead); failing checks and acknowledged findings are never baselined. A baseline rule is by object name, so a recreated object with the same name stays hidden until the rule expires. Narrow it like `check`, e.g. `--category hygiene`.
