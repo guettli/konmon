@@ -245,6 +245,11 @@ func (e *Engine) Evaluate(ctx context.Context, snap *Snapshot, hist History, now
 	var err error
 feed:
 	for _, t := range tasks {
+		// select picks a random ready case: without this check a cancelled
+		// evaluation could still run (and return) everything.
+		if err = ctx.Err(); err != nil {
+			break
+		}
 		select {
 		case ch <- t:
 		case <-ctx.Done():
