@@ -165,11 +165,11 @@ func TestIgnorer(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := testFinding("conditions", checks.CategoryHealth, "a", "x")
-	if !ig.ignored(&f, time.Now()) {
+	if ig.ignored(&f, time.Now()) == "" {
 		t.Error("the regex should match")
 	}
 	checkError := checks.Finding{Check: checks.ErrorCheck, Message: "check broken failed"}
-	if ig.ignored(&checkError, time.Now()) {
+	if ig.ignored(&checkError, time.Now()) != "" {
 		t.Error("a regex must never hide a failing check")
 	}
 	if _, err := (&checkFlags{ignoreFindings: []string{"("}}).ignorer(); err == nil {

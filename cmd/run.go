@@ -160,6 +160,19 @@ func run(ctx context.Context) error {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		// A rule may expire while konmon runs.
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				ignore.warnExpired(log, now)
+			}
+		}
+	}()
 
 	st, err := store.Open(ctx, dbPath)
 	if err != nil {

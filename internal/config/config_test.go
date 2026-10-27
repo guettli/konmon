@@ -35,7 +35,7 @@ ignore:
   - check: container-*
     comment: no requests anywhere
   - check: check-error
-    name: x
+    key: x
     comment: known broken check
 `), "konmon.yaml")
 	if err != nil {
@@ -56,8 +56,9 @@ ignore:
 		{widget("other", "Stalled", "Waiting for upstream"), now, -1},
 		{widget("team-a", "Ready", "Waiting for upstream"), now, -1},
 		{&checks.Finding{Check: "container-image-tag", Name: "d"}, now, 1},
+		{widget("", "Stalled", "Waiting for x"), now, -1}, // cluster-scoped: namespace: team-* does not match
 		{&checks.Finding{Check: checks.ErrorCheck, Message: "check conditions failed"}, now, -1}, // a broad rule never hides a failing check
-		{&checks.Finding{Check: checks.ErrorCheck, Name: "x"}, now, 2},
+		{&checks.Finding{Check: checks.ErrorCheck, Key: "x"}, now, 2},
 	}
 	for i, c := range cases {
 		got := -1
@@ -90,6 +91,8 @@ func TestParseErrors(t *testing.T) {
 		"bad until":       "ignore:\n  - check: x\n    until: tomorrow\n    comment: x\n",
 		"empty rule":      "ignore:\n  -\n",
 		"unknown section": "ignores: []\n",
+		"only stars":      "ignore:\n  - check: '*'\n    namespace: '**'\n    comment: x\n",
+		"two documents":   "ignore:\n  - check: a\n    comment: x\n---\nignore:\n  - check: b\n    comment: y\n",
 	}
 	for name, data := range cases {
 		if _, err := Parse([]byte(data), "c.yaml"); err == nil {

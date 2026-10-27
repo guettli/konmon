@@ -108,21 +108,35 @@ func (c *checkFlags) ignorer() (*ignorer, error) {
 type ignorer struct {
 	config  *config.Config
 	regexps []*regexp.Regexp
+	warned  map[*config.IgnoreRule]bool // expired rules which were logged
 }
 
-func (ig *ignorer) ignored(f *checks.Finding, now time.Time) bool {
-	if ig.config.Ignored(f, now) != nil {
-		return true
+// ignored returns the rule which drops the finding, or "".
+func (ig *ignorer) ignored(f *checks.Finding, now time.Time) string {
+	if r := ig.config.Ignored(f, now); r != nil {
+		return r.Source
 	}
 	if f.Check == checks.ErrorCheck {
-		return false // a failing check is never hidden by a regex
+		return "" // a failing check is never hidden by a regex
 	}
-	return matchAny(ig.regexps, f.Subject())
+	for _, re := range ig.regexps {
+		if re.MatchString(f.Subject()) {
+			return "--ignore-finding-regex " + re.String()
+		}
+	}
+	return ""
 }
 
-// warnExpired logs the rules which do not match any more.
+// warnExpired logs the rules which do not match any more, each once.
 func (ig *ignorer) warnExpired(log *slog.Logger, now time.Time) {
+	if ig.warned == nil {
+		ig.warned = map[*config.IgnoreRule]bool{}
+	}
 	for _, r := range ig.config.Expired(now) {
+		if ig.warned[r] {
+			continue
+		}
+		ig.warned[r] = true
 		log.Warn("ignore rule expired, findings it matched are reported again", "rule", r.Source, "until", r.Until, "comment", r.Comment)
 	}
 }

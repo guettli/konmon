@@ -38,9 +38,9 @@ type Notifier interface {
 // Config configures a Monitor.
 type Config struct {
 	Checks *checks.Engine
-	// Ignore drops findings (config rules, --ignore-finding-regex). nil
-	// drops none.
-	Ignore func(f *checks.Finding, now time.Time) bool
+	// Ignore drops findings (config rules, --ignore-finding-regex): it
+	// returns the rule which matches, or "". nil drops none.
+	Ignore func(f *checks.Finding, now time.Time) string
 	// ExcludeNamespaces are glob patterns of namespaces to ignore completely.
 	ExcludeNamespaces []string
 	// StoreType decides which resource types are written to the database.
@@ -344,13 +344,18 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		m.cfg.Log.Warn("check failed", "check", f.Check, "uid", f.UID, "err", f.Err)
 	}
 	current := make([]checks.Finding, 0, len(res.Findings))
+	ignoredBy := map[string]string{} // finding ID → rule
 	for i := range res.Findings {
-		if m.cfg.Ignore == nil || !m.cfg.Ignore(&res.Findings[i], now) {
-			current = append(current, res.Findings[i])
+		if m.cfg.Ignore != nil {
+			if rule := m.cfg.Ignore(&res.Findings[i], now); rule != "" {
+				ignoredBy[res.Findings[i].ID()] = rule
+				continue
+			}
 		}
+		current = append(current, res.Findings[i])
 	}
 	m.cfg.Log.Debug("evaluated", "objects", res.Objects, "calls", res.Calls, "findings", len(current),
-		"failures", len(res.Failures), "duration", res.Duration.Round(time.Millisecond))
+		"ignored", len(ignoredBy), "failures", len(res.Failures), "duration", res.Duration.Round(time.Millisecond))
 
 	// A check which failed for an object keeps its previous findings for
 	// that object: otherwise they would resolve, and fire again later with
@@ -370,6 +375,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	}
 	for i := range resolved {
 		f := &resolved[i].Finding
+		if rule, ok := ignoredBy[f.ID()]; ok {
+			// Still there, but a rule (new or changed config) drops it now.
+			m.cfg.Log.Info("finding ignored", "finding", f.Line(now), "rule", rule, "openFor", now.Sub(resolved[i].FirstSeen).Round(time.Second))
+			continue
+		}
 		m.cfg.Log.Info("finding resolved", "finding", f.Line(now), "openFor", now.Sub(resolved[i].FirstSeen).Round(time.Second))
 	}
 	var firing []store.FindingRow

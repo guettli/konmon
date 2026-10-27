@@ -7,8 +7,9 @@
 # UTC) is optional: after that day the rule does not match any more and
 # konmon warns.
 #
-# A failing check (check-error) is only hidden by a rule with
-# check: check-error.
+# Quote globs which start with "*" (YAML anchors). A namespace pattern never
+# matches cluster-scoped objects. A failing check (check-error) is only hidden
+# by a rule with check: check-error and key: <name of the failing check>.
 ignore:
   - check: conditions
     resource: widgets.example.com

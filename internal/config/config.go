@@ -71,6 +71,11 @@ func Parse(data []byte, name string) (*Config, error) {
 	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	var more any
+	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
+		// Rules in a second document would be silently dropped.
+		return nil, fmt.Errorf("%s: only one YAML document is allowed (no ---)", name)
+	}
 	for i, r := range cfg.Ignore {
 		if r == nil {
 			return nil, fmt.Errorf("%s: ignore[%d] is empty", name, i)
@@ -88,18 +93,20 @@ func (r *IgnoreRule) compile() error {
 		"check": r.Check, "resource": r.Resource, "namespace": r.Namespace, "name": r.Name,
 		"condition": r.Condition, "container": r.Container, "key": r.Key,
 	}
-	empty := r.Message == ""
+	matchesAll := r.Message == ""
 	for field, g := range globs {
 		if g == "" {
 			continue
 		}
-		empty = false
+		if strings.Trim(g, "*") != "" {
+			matchesAll = false
+		}
 		if _, err := path.Match(g, ""); err != nil {
 			return fmt.Errorf("%s: invalid pattern %q: %w", field, g, err)
 		}
 	}
-	if empty {
-		return errors.New("a rule needs at least one of check, resource, namespace, name, condition, container, key, message")
+	if matchesAll {
+		return errors.New("a rule needs at least one of check, resource, namespace, name, condition, container, key, message, other than \"*\"")
 	}
 	if strings.TrimSpace(r.Comment) == "" {
 		return errors.New("comment is required: say why these findings are fine")
@@ -127,8 +134,8 @@ func (r *IgnoreRule) Expired(now time.Time) bool {
 }
 
 // Match reports whether the rule drops the finding. A check-error finding is
-// only matched by a rule with check: check-error, so a broad rule never hides
-// a failing check.
+// only matched by a rule with check: check-error (key is the name of the
+// failing check), so a broad rule never hides a failing check.
 func (r *IgnoreRule) Match(f *checks.Finding, now time.Time) bool {
 	if r.Expired(now) {
 		return false
@@ -139,6 +146,9 @@ func (r *IgnoreRule) Match(f *checks.Finding, now time.Time) bool {
 	resource := ""
 	if f.GVR.Resource != "" {
 		resource = checks.FormatResource(f.GVR.GroupResource())
+	}
+	if r.Namespace != "" && f.Namespace == "" {
+		return false // a namespace pattern never matches cluster-scoped objects
 	}
 	if !glob(r.Check, f.Check) || !glob(r.Resource, resource) || !glob(r.Namespace, f.Namespace) ||
 		!glob(r.Name, f.Name) || !glob(r.Container, f.Container) || !glob(r.Key, f.Key) {

@@ -154,7 +154,7 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 		if !checkOpts.filter.match(f) {
 			continue
 		}
-		if ignore.ignored(f, now) {
+		if ignore.ignored(f, now) != "" {
 			ignored++
 			continue
 		}
