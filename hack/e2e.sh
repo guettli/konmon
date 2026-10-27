@@ -7,6 +7,7 @@ set -euo pipefail
 cluster=${KIND_CLUSTER:-konmon-e2e}
 image=konmon:e2e
 ctx=kind-$cluster
+arch=$(go env GOARCH)
 
 if ! kind get clusters | grep -qx "$cluster"; then
   kind create cluster --name "$cluster" --wait 120s
@@ -14,16 +15,28 @@ fi
 
 echo "--- build and load the image"
 mkdir -p dist
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/konmon-linux-amd64 .
-docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -t "$image" .
+CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o "dist/konmon-linux-$arch" .
+docker build --build-arg TARGETOS=linux --build-arg TARGETARCH="$arch" -t "$image" .
 kind load docker-image "$image" --name "$cluster"
 go build -o dist/konmon .
 
-echo "--- deploy konmon with deploy/"
-kubectl --context "$ctx" kustomize deploy | sed "s#ghcr.io/guettli/konmon:latest#$image#" | kubectl --context "$ctx" apply -f -
+echo "--- deploy konmon with deploy/, the image of this commit"
+overlay=dist/e2e-overlay # kustomize wants a relative path to deploy/
+mkdir -p "$overlay"
+cat > "$overlay/kustomization.yaml" <<YAML
+resources:
+  - ../../deploy
+images:
+  - name: ghcr.io/guettli/konmon
+    newName: konmon
+    newTag: e2e
+YAML
+kubectl --context "$ctx" kustomize "$overlay" | kubectl --context "$ctx" apply -f -
 kubectl --context "$ctx" -n konmon rollout status deploy/konmon --timeout=180s
 
 echo "--- a healthy cluster has no health findings"
+kubectl --context "$ctx" delete namespace e2e --ignore-not-found --wait # an earlier run
+kubectl --context "$ctx" wait --for=condition=Ready pod --all --all-namespaces --timeout=180s
 ./dist/konmon check --context "$ctx" --category health
 
 echo "--- break a Deployment"
@@ -51,7 +64,7 @@ done
 
 echo "--- the running konmon recorded it"
 for i in $(seq 1 30); do
-  out=$(kubectl --context "$ctx" -n konmon exec deploy/konmon -- /konmon findings --db /data/konmon.db -n e2e --category health)
+  out=$(kubectl --context "$ctx" -n konmon exec deploy/konmon -- /konmon findings --db /data/konmon.db -n e2e --category health || true)
   if grep -q "pod-container-waiting" <<<"$out"; then
     echo "$out"
     break

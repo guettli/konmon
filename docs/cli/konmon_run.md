@@ -25,7 +25,7 @@ konmon run [flags]
       --check-timeout duration             Time limit for one call of a check function. (default 1s)
       --checks stringArray                 Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
       --cluster-name string                Value of the 'cluster' label of alerts. Empty: no label.
-      --config stringArray                 Config file with ignore rules (YAML, see README). Can be given multiple times: the rules are merged.
+      --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
       --context string                     Kubeconfig context to use. Default: current context.
       --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed.
       --discovery-interval duration        Time between two discoveries of resource types (new CRDs). (default 5m0s)

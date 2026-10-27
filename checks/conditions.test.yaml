@@ -289,3 +289,13 @@ cases:
         condition: Ready
         message: 'Condition Ready=False X ""'
         details: {status: "False", reason: X, message: ""}
+
+  - name: PVC condition Unused is informational
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: data, namespace: default}
+      status:
+        phase: Bound
+        conditions:
+          - {type: Unused, status: "False", reason: PodUsingPVC, message: A pod is currently referencing this PVC}
+    expect: []

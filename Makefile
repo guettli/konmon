@@ -28,7 +28,7 @@ lint:
 	go mod tidy && git diff --exit-code go.mod go.sum
 	cd tools && go mod tidy && git diff --exit-code go.mod go.sum
 	shellcheck hack/*.sh
-	$(MAKE) docs && git diff --exit-code -- docs
+	$(MAKE) docs && test -z "$$(git status --porcelain -- docs)" || (git status --short -- docs; echo 'docs are out of date: run make docs'; exit 1)
 
 # Generated docs: the CLI reference (docs/cli) and the table of core checks.
 docs:

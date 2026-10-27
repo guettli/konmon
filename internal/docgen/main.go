@@ -107,7 +107,8 @@ func describe(code string) (reports, from string) {
 		header = append(header, strings.TrimSpace(strings.TrimPrefix(line, "//")))
 	}
 	text := strings.Join(header, " ")
-	first := strings.SplitN(text, "  ", 2)[0] // up to an empty comment line
+	// An empty comment line ends the first paragraph: joined, it is "  ".
+	first := strings.SplitN(text, "  ", 2)[0]
 	if i := strings.Index(first, ". "); i >= 0 {
 		first = first[:i]
 	}

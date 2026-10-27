@@ -40,7 +40,7 @@ Binaries for Linux, macOS and Windows are attached to every [release](https://gi
 
 ```console
 # What is wrong in the cluster right now? Health first, hygiene below.
-# Exit code 1: health findings.
+# Exit code 1: health findings; 2: some resource types could not be listed.
 konmon check --context prod
 
 # False positives (e.g. conditions of CRDs konmon does not know): fix them
@@ -55,7 +55,7 @@ konmon findings --db konmon.db --at 2h
 konmon history --db konmon.db -n kube-system pods/coredns-6799fbcd5-abcde
 ```
 
-In a cluster: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=v0.0.10'` (see [deploy](docs/deploy.md)).
+In a cluster: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'` to try it; for real use pin a release, see [Running in a cluster](docs/deploy.md).
 
 ## Documentation
 

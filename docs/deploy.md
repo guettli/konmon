@@ -2,23 +2,52 @@
 
 [deploy/](../deploy/) has everything konmon needs, in the namespace `konmon`:
 
-```console
-kubectl apply -k 'github.com/guettli/konmon/deploy?ref=v0.0.10'
-```
+To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
 
 - a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
-- a PersistentVolumeClaim for the database (`/data`, 2Gi);
+- a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
 - a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
-- a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and probes on `/healthz`.
+- a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and a liveness probe on `/healthz` (it fails when evaluations stop).
 
-Pin the image version, and add `--cluster-name` and `--alertmanager-url` to the args (a kustomize patch, or a copy of the file). CI deploys these manifests on a kind cluster for every change ([hack/e2e.sh](../hack/e2e.sh)).
+For real use, pin a [release](https://github.com/guettli/konmon/releases) (the manifests and the image) and set the cluster name and Alertmanager in your own `kustomization.yaml`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - github.com/guettli/konmon/deploy?ref=vX.Y.Z # a release which contains deploy/
+images:
+  - name: ghcr.io/guettli/konmon
+    newTag: vX.Y.Z
+patches:
+  - target:
+      kind: Deployment
+      name: konmon
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --cluster-name=prod
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --alertmanager-url=http://alertmanager.monitoring.svc:9093
+configMapGenerator:
+  - name: konmon-config
+    namespace: konmon
+    behavior: replace
+    files:
+      - konmon.yaml # written with konmon triage
+```
+
+CI deploys these manifests on a kind cluster for every change ([hack/e2e.sh](../hack/e2e.sh)).
 
 To look at the history, run the commands inside the Pod (the image is distroless, `/konmon` is the only binary):
 
 ```console
 kubectl -n konmon exec deploy/konmon -- /konmon findings --db /data/konmon.db --at 3h
-kubectl -n konmon exec -i deploy/konmon -- /konmon triage --from-db --db /data/konmon.db --config /data/new.yaml
+kubectl -n konmon exec deploy/konmon -- /konmon history --db /data/konmon.db -n kube-system pods/coredns-6799fbcd5-abcde
 ```
+
+Triage on your machine, with the config you deployed, and put the result back into the ConfigMap: `konmon triage --context prod --config konmon.yaml`.
 
 ## Important flags of `konmon run`
 

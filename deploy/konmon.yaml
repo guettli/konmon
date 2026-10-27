@@ -85,7 +85,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: konmon
-          image: ghcr.io/guettli/konmon:latest # pin a version, e.g. v0.0.10
+          image: ghcr.io/guettli/konmon:latest # pin a release with images: in your kustomization, see docs/deploy.md
           args:
             - run
             - --db=/data/konmon.db

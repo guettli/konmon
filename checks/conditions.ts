@@ -16,6 +16,9 @@ const typesToSkip = [
   "NetworkAttached",
   "PodReadyToStartContainers", // completed pods have "False".
   "RefVersionsUpToDate", // happens during api version transition.
+  // PersistentVolumeClaims (newer Kubernetes): False while a Pod uses the
+  // claim; True only says that none does. Found by the e2e test on kind.
+  "Unused",
 ];
 
 // True is healthy, per resource (name of the resource, any group).

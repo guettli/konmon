@@ -35,7 +35,7 @@ konmon check [CHECK...] [flags]
       --check-param stringArray            Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.
       --check-timeout duration             Time limit for one call of a check function. (default 1s)
       --checks stringArray                 Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
-      --config stringArray                 Config file with ignore rules (YAML, see README). Can be given multiple times: the rules are merged.
+      --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
       --context string                     Kubeconfig context to use. Default: current context.
       --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed.
       --exclude-namespace strings          Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
