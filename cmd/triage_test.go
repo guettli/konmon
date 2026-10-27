@@ -191,3 +191,44 @@ func TestTriageRejectsPastUntil(t *testing.T) {
 		t.Errorf("mode of a new file: %v", info.Mode())
 	}
 }
+
+func TestTriageBaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	odd := conditionFinding("a", "w2", "Weird[*]", "False", "X")
+	findings := []*checks.Finding{
+		conditionFinding("a", "w1", "Ready", "False", "Down"),
+		odd,
+		{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Key: "boom", Message: "check boom failed"},
+	}
+	editor, err := config.OpenEditor(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	s := &triageSession{ctx: context.Background(), out: &out, editor: editor, base: &config.Config{}, all: findings, universe: findings, now: now}
+	if err := s.baseline("90d"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "added 2 ignore rules") || !strings.Contains(out.String(), "expiring after 2027-01-25") ||
+		!strings.Contains(out.String(), "Not baselined: 1 finding") {
+		t.Errorf("output:\n%s", out.String())
+	}
+	cfg, err := config.Load([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ignored(findings[0], now) == nil || cfg.Ignored(odd, now) == nil || cfg.Ignored(findings[2], now) != nil {
+		t.Errorf("rules: %+v", cfg.Ignore)
+	}
+	other := conditionFinding("a", "w2", "WeirdX", "False", "X") // must not match the quoted glob of odd
+	if cfg.Ignored(other, now) != nil {
+		t.Error("glob characters of a key must be quoted")
+	}
+	if cfg.Ignore[0].Comment != "baseline 2026-10-27" {
+		t.Errorf("comment %q", cfg.Ignore[0].Comment)
+	}
+	if err := s.baseline("2020-01-01"); err == nil {
+		t.Error("want an error for a date in the past")
+	}
+}

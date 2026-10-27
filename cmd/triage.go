@@ -24,8 +24,10 @@ import (
 )
 
 var (
-	triageOpts   checkOptions
-	triageFromDB bool
+	triageOpts          checkOptions
+	triageFromDB        bool
+	triageBaseline      bool
+	triageBaselineUntil string
 )
 
 var triageCmd = &cobra.Command{
@@ -41,10 +43,16 @@ The cluster is never changed: review the file and deploy it like any config.
 Findings come from listing the cluster once, like 'konmon check' (same flags),
 or with --from-db from the database of a running 'konmon run' (--db).
 
+With --baseline nothing is asked: every open finding gets a narrow ignore
+rule (this object) which expires after --baseline-until, so the cluster is
+quiet now and only new problems are reported. Running it again adds only new
+findings. Failing checks and acknowledged findings are never baselined.
+
 Examples:
   konmon triage --context prod --config konmon.yaml
   konmon triage --config shared.yaml --config prod.yaml -n 'team-*'
-  konmon triage --from-db --db /data/konmon.db --config konmon.yaml`,
+  konmon triage --from-db --db /data/konmon.db --config konmon.yaml
+  konmon triage --context prod --config konmon.yaml --baseline --category hygiene`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return triage(cmd.Context(), cmd, args)
@@ -54,6 +62,10 @@ Examples:
 func init() {
 	triageOpts.register(triageCmd.Flags())
 	triageCmd.Flags().BoolVar(&triageFromDB, "from-db", false, "Take the open findings from the database of 'konmon run' (--db) instead of listing the cluster.")
+	triageCmd.Flags().BoolVar(&triageBaseline, "baseline", false,
+		"Do not ask: write one narrow ignore rule per open finding, so only new problems are reported. Like the baseline of a linter.")
+	triageCmd.Flags().StringVar(&triageBaselineUntil, "baseline-until", "90d",
+		"Expiry of the --baseline rules: YYYY-MM-DD or a number of days (90d), so the findings come back for a real triage. Empty: never.")
 	rootCmd.AddCommand(triageCmd)
 }
 
@@ -143,6 +155,9 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 		in: bufio.NewReader(cmd.InOrStdin()), out: cmd.OutOrStdout(),
 		editor: editor, base: base, all: findings, universe: universe, now: now, store: st, ctx: ctx,
 		narrowed: len(only) > 0 || len(triageOpts.filter.categories) > 0,
+	}
+	if triageBaseline {
+		return t.baseline(triageBaselineUntil)
 	}
 	return t.run()
 }
@@ -425,9 +440,17 @@ type rung struct {
 	count int // current findings it hides
 }
 
+// globQuote escapes the glob characters of a value, so a rule matches it
+// exactly (a key of an own check may contain "*" or "[").
+func globQuote(s string) string {
+	return globSpecial.ReplaceAllString(s, `\$0`)
+}
+
+var globSpecial = regexp.MustCompile(`[*?\[\\]`)
+
 // groupRule matches the findings of the group everywhere.
 func groupRule(g *triageGroup) config.IgnoreRule {
-	r := config.IgnoreRule{Check: g.check, Resource: g.resource, Condition: g.condition}
+	r := config.IgnoreRule{Check: globQuote(g.check), Resource: globQuote(g.resource), Condition: globQuote(g.condition)}
 	if g.check == "conditions" && g.condition != "" {
 		// The message of the conditions check starts with this.
 		r.Message = "^" + regexp.QuoteMeta(fmt.Sprintf("Condition %s=%s %s ", g.condition, g.status, g.reason))
@@ -459,13 +482,16 @@ func (t *triageSession) ladder(g *triageGroup) []rung {
 	}
 	if f.Check == checks.ErrorCheck {
 		// Never offer to hide every failing check with one key.
-		add("only failures of check "+f.Key, config.IgnoreRule{Check: f.Check, Key: f.Key})
+		add("only failures of check "+f.Key, config.IgnoreRule{Check: f.Check, Key: globQuote(f.Key)})
 		return rungs
 	}
-	add("only "+findingObject(f), config.IgnoreRule{Check: f.Check, Resource: g.resource, Namespace: f.Namespace, Name: f.Name, Key: f.Key})
+	add("only "+findingObject(f), config.IgnoreRule{
+		Check: globQuote(f.Check), Resource: globQuote(g.resource), Namespace: globQuote(f.Namespace),
+		Name: globQuote(f.Name), Key: globQuote(f.Key),
+	})
 	if f.Namespace != "" {
 		r := group
-		r.Namespace = f.Namespace
+		r.Namespace = globQuote(f.Namespace)
 		add("these findings in namespace "+f.Namespace, r)
 	}
 	add("these findings everywhere", group)
@@ -596,19 +622,11 @@ func (t *triageSession) until(prompt, def string) (string, error) {
 		if answer == "" {
 			return "", nil
 		}
-		if days, ok := strings.CutSuffix(answer, "d"); ok {
-			if n, err := strconv.Atoi(days); err == nil && n > 0 {
-				return t.now.UTC().AddDate(0, 0, n).Format(time.DateOnly), nil
-			}
+		date, err := parseUntil(answer, t.now)
+		if err == nil {
+			return date, nil
 		}
-		if d, err := time.Parse(time.DateOnly, answer); err == nil {
-			if d.Before(t.now.UTC().Truncate(24 * time.Hour)) {
-				t.printf("  That day is in the past.\n")
-				continue
-			}
-			return answer, nil
-		}
-		t.printf("  Want YYYY-MM-DD or a number of days like 30d.\n")
+		t.printf("  %s.\n", upperFirst(err.Error()))
 	}
 }
 
@@ -639,4 +657,70 @@ func (t *triageSession) save() error {
 	}
 	t.changes++
 	return nil
+}
+
+// baseline writes one narrow ignore rule per finding, without asking.
+func (t *triageSession) baseline(until string) error {
+	until, err := parseUntil(until, t.now)
+	if err != nil {
+		return fmt.Errorf("--baseline-until: %w", err)
+	}
+	comment := "baseline " + t.now.UTC().Format(time.DateOnly)
+	added, skipped := 0, 0
+	for _, f := range t.all {
+		if f.Check == checks.ErrorCheck || t.base.IsAcknowledged(f, t.now) != nil {
+			skipped++
+			continue
+		}
+		rule := &config.IgnoreRule{
+			Check: globQuote(f.Check), Resource: globQuote(findingResource(f)), Namespace: globQuote(f.Namespace),
+			Name: globQuote(f.Name), Key: globQuote(f.Key), Until: until, Comment: comment,
+		}
+		if err := t.editor.AddIgnore(rule); err != nil {
+			return fmt.Errorf("%s: %w", f.Line(t.now), err)
+		}
+		added++
+	}
+	if added > 0 {
+		if err := t.save(); err != nil {
+			return err
+		}
+	}
+	t.printf("Baseline: added %s to %s", plural(added, "ignore rule"), t.editor.Path())
+	if until != "" {
+		t.printf(", expiring after %s", until)
+	}
+	t.printf(".\n")
+	if skipped > 0 {
+		t.printf("Not baselined: %s (failing checks or acknowledged).\n", plural(skipped, "finding"))
+	}
+	return nil
+}
+
+// parseUntil accepts "", YYYY-MM-DD (today or later) or a number of days
+// ("30d") and returns the date.
+func parseUntil(s string, now time.Time) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n > 0 {
+			return now.UTC().AddDate(0, 0, n).Format(time.DateOnly), nil
+		}
+	}
+	d, err := time.Parse(time.DateOnly, s)
+	if err != nil {
+		return "", errors.New("want YYYY-MM-DD or a number of days like 30d")
+	}
+	if d.Before(now.UTC().Truncate(24 * time.Hour)) {
+		return "", errors.New("that day is in the past")
+	}
+	return s, nil
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
