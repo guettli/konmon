@@ -12,6 +12,13 @@ export default defineCheck({
   },
   reads: ["serviceaccounts"],
   check(obj, ctx) {
+    // Nothing will create Pods: finished Jobs, workloads scaled to zero,
+    // suspended CronJobs.
+    if (obj.spec?.replicas === 0 || obj.spec?.suspend === true) return [];
+    if ((obj.status?.conditions ?? []).some((c: any) => (c.type === "Complete" || c.type === "Failed") && c.status === "True")) {
+      return [];
+    }
+    if (!ctx.has("serviceaccounts")) return [];
     const sa = podSpec(obj, ctx.resource.resource)?.serviceAccountName;
     if (!sa || sa === "default") return [];
     if (ctx.get("serviceaccounts", obj.metadata.namespace ?? null, sa)) return [];

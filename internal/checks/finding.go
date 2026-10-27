@@ -38,6 +38,8 @@ type Finding struct {
 	Condition string            `json:"condition,omitempty"`
 	Container string            `json:"container,omitempty"`
 	Details   map[string]string `json:"details,omitempty"`
+	// For overrides konmon's --for (from the check's forSeconds).
+	For time.Duration `json:"for,omitempty"`
 }
 
 // ID identifies a finding across evaluations. It does not contain values

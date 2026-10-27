@@ -120,6 +120,12 @@ declare module "konmon" {
     /** Other resource types the check reads with ctx.get/ctx.list. */
     reads?: string[];
     uses?: "history"[];
+    /**
+     * How long a finding must be open before it fires, for this check;
+     * default: konmon's --for (2m). For states which are normal for a
+     * while, e.g. Pods starting during a rollout.
+     */
+    forSeconds?: number;
     /** Defaults; override with --check-param name.key=value. */
     params?: P;
     check(obj: KubeObject, ctx: Context<P>): Finding[] | void;

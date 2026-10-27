@@ -13,6 +13,7 @@ export default defineCheck({
   check(ing, ctx) {
     const ns = ing.metadata.namespace ?? "";
     const findings: Finding[] = [];
+    if (!ctx.has("services")) return [];
     const seen = new Set<string>();
     const checkBackend = (backend: any) => {
       const svc = backend?.service;
@@ -25,6 +26,7 @@ export default defineCheck({
         findings.push({ key, message: `Ingress uses the Service ${svc.name} which does not exist` });
         return;
       }
+      if (s.spec?.type === "ExternalName") return; // usually without ports
       const port = svc.port ?? {};
       if (port.name === undefined && port.number === undefined) {
         findings.push({ key, message: `Ingress backend ${svc.name} has no port name or number` });

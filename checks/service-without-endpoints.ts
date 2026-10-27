@@ -1,20 +1,28 @@
-// Reports Services with a selector which have no ready endpoints: traffic
-// to them fails. Services without selector (endpoints managed by hand or by
-// an operator) and ExternalName Services are skipped.
+// Reports Services whose Pods exist but none is ready: traffic to them
+// fails. A Service without any matching (running) Pod is not reported:
+// scale-to-zero, a suspended app or a Service for Job Pods is normal.
+// Services without selector (endpoints managed by hand or by an operator)
+// and ExternalName Services are skipped.
 //
 // Ported from k8sgpt (github.com/k8sgpt-ai/k8sgpt, Apache-2.0),
 // pkg/analyzer/service.go, using EndpointSlices instead of the deprecated
 // Endpoints.
-import { defineCheck } from "konmon";
+import { defineCheck, matchesSelector } from "konmon";
 
 export default defineCheck({
   name: "service-without-endpoints",
   match: { resources: ["services"] },
-  reads: ["endpointslices.discovery.k8s.io"],
+  reads: ["endpointslices.discovery.k8s.io", "pods"],
   check(svc, ctx) {
     if (svc.spec?.type === "ExternalName") return [];
     const selector: Record<string, string> = svc.spec?.selector ?? {};
     if (Object.keys(selector).length === 0) return [];
+    if (!ctx.has("endpointslices.discovery.k8s.io")) return [];
+    const pods = ctx
+      .list("pods", { namespace: svc.metadata.namespace })
+      .filter((p) => p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed")
+      .filter((p) => matchesSelector(p.metadata.labels, { matchLabels: selector }));
+    if (pods.length === 0) return [];
     const slices = ctx.list("endpointslices.discovery.k8s.io", {
       namespace: svc.metadata.namespace,
       labels: { "kubernetes.io/service-name": svc.metadata.name },
@@ -27,9 +35,6 @@ export default defineCheck({
       .sort()
       .map((k) => `${k}=${selector[k]}`)
       .join(",");
-    if (endpoints.length > 0) {
-      return [{ message: `Service has ${endpoints.length} endpoints, none ready (selector ${sel})` }];
-    }
-    return [{ message: `Service has no endpoints: no Pod matches the selector ${sel}` }];
+    return [{ message: `Service has no ready endpoints, but ${pods.length} Pods match its selector ${sel}` }];
   },
 });

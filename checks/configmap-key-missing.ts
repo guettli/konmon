@@ -10,6 +10,10 @@ export default defineCheck({
   match: { resources: ["pods"] },
   reads: ["configmaps"],
   check(pod, ctx) {
+    // A finished Pod (e.g. of a Job) may reference a ConfigMap which was
+    // pruned since; it will not start again.
+    const phase = pod.status?.phase;
+    if (phase === "Succeeded" || phase === "Failed" || !ctx.has("configmaps")) return [];
     const ns = pod.metadata.namespace ?? "";
     const findings: Finding[] = [];
     const seen = new Set<string>();

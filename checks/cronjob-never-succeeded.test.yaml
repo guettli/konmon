@@ -1,6 +1,6 @@
 check: cronjob-never-succeeded
 cases:
-  - name: only failed jobs
+  - name: newest job failed
     resource: cronjobs.batch
     object:
       metadata: {name: backup, namespace: default, uid: cj1}
@@ -8,21 +8,33 @@ cases:
     related:
       - resource: jobs.batch
         object:
-          metadata: {name: backup-1, namespace: default, ownerReferences: [{uid: cj1, kind: CronJob, name: backup, apiVersion: batch/v1}]}
+          metadata: {name: backup-2, namespace: default, creationTimestamp: "2026-01-01T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: backup, apiVersion: batch/v1}]}
+          status: {conditions: [{type: Failed, status: "True"}]}
+      - resource: jobs.batch
+        object:
+          metadata: {name: backup-1, namespace: default, creationTimestamp: "2025-12-31T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: backup, apiVersion: batch/v1}]}
           status: {conditions: [{type: Failed, status: "True"}]}
     expect:
-      - {message: CronJob has never succeeded (1 failed Jobs), since: "2026-01-01T00:00:00Z"}
-  - name: never scheduled or succeeded
+      - {message: "CronJob has never succeeded; its newest Job backup-2 failed", since: "2026-01-01T00:00:00Z"}
+  - name: newest job is running again
+    resource: cronjobs.batch
+    object:
+      metadata: {name: backup, namespace: default, uid: cj1}
+      status: {lastScheduleTime: "2026-01-02T00:00:00Z"}
+    related:
+      - resource: jobs.batch
+        object:
+          metadata: {name: backup-3, namespace: default, creationTimestamp: "2026-01-02T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: backup, apiVersion: batch/v1}]}
+          status: {active: 1}
+      - resource: jobs.batch
+        object:
+          metadata: {name: backup-2, namespace: default, creationTimestamp: "2026-01-01T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: backup, apiVersion: batch/v1}]}
+          status: {conditions: [{type: Failed, status: "True"}]}
+    expect: []
+  - name: succeeded once
     resource: cronjobs.batch
     available: [jobs.batch]
     object:
       metadata: {name: backup, namespace: default}
       status: {lastScheduleTime: "2026-01-01T00:00:00Z", lastSuccessfulTime: "2026-01-01T00:01:00Z"}
-    expect: []
-  - name: first job still running
-    resource: cronjobs.batch
-    available: [jobs.batch]
-    object:
-      metadata: {name: backup, namespace: default}
-      status: {lastScheduleTime: "2026-01-01T00:00:00Z", active: [{name: backup-1}]}
     expect: []

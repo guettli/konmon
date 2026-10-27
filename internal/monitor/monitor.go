@@ -374,9 +374,9 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	}
 	var firing []store.FindingRow
 	for _, r := range open {
-		if now.Sub(r.FirstSeen) >= m.cfg.For {
+		if forDur := m.forOf(&r.Finding); now.Sub(r.FirstSeen) >= forDur {
 			// Log once: in the evaluation where the finding crossed For.
-			if now.Sub(r.FirstSeen)-m.cfg.EvalInterval < m.cfg.For {
+			if now.Sub(r.FirstSeen)-m.cfg.EvalInterval < forDur {
 				m.cfg.Log.Info("finding firing", "finding", r.Finding.Line(now))
 			}
 			if r.Finding.Category == checks.CategoryHealth {
@@ -395,7 +395,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	// Only report resolved findings which fired before.
 	var resolvedFired []store.FindingRow
 	for _, r := range recent {
-		if r.ResolvedAt.Sub(r.FirstSeen) >= m.cfg.For && r.Finding.Category == checks.CategoryHealth {
+		if r.ResolvedAt.Sub(r.FirstSeen) >= m.forOf(&r.Finding) && r.Finding.Category == checks.CategoryHealth {
 			resolvedFired = append(resolvedFired, r)
 		}
 	}
@@ -403,6 +403,15 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("notify: %w", err)
 	}
 	return nil
+}
+
+// forOf is how long a finding must be open before it fires: the check's
+// forSeconds, or --for.
+func (m *Monitor) forOf(f *checks.Finding) time.Duration {
+	if f.For > 0 {
+		return f.For
+	}
+	return m.cfg.For
 }
 
 // notifyOpen sends the findings which are firing according to the store.
@@ -416,7 +425,7 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
 	}
 	var firing []store.FindingRow
 	for _, r := range open {
-		if r.ResolvedAt.IsZero() && now.Sub(r.FirstSeen) >= m.cfg.For && r.Finding.Category == checks.CategoryHealth {
+		if r.ResolvedAt.IsZero() && now.Sub(r.FirstSeen) >= m.forOf(&r.Finding) && r.Finding.Category == checks.CategoryHealth {
 			firing = append(firing, r)
 		}
 	}

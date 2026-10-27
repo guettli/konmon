@@ -52,3 +52,19 @@ cases:
       status: {phase: Lost}
     expect:
       - {message: "PersistentVolumeClaim is Lost: its PersistentVolume is gone"}
+  - name: generic ephemeral volume used by its pod
+    resource: persistentvolumeclaims
+    now: 2026-01-01T01:00:00Z
+    object:
+      metadata: {name: p-scratch, namespace: default, creationTimestamp: "2026-01-01T00:00:00Z"}
+      spec: {storageClassName: local-path}
+      status: {phase: Pending}
+    related:
+      - resource: storageclasses.storage.k8s.io
+        object: {metadata: {name: local-path}, volumeBindingMode: WaitForFirstConsumer}
+      - resource: pods
+        object:
+          metadata: {name: p, namespace: default}
+          spec: {volumes: [{name: scratch, ephemeral: {volumeClaimTemplate: {spec: {}}}}]}
+    expect:
+      - {message: PersistentVolumeClaim is Pending}

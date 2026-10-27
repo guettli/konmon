@@ -21,7 +21,7 @@ export default defineCheck({
     const ref = hpa.spec?.scaleTargetRef;
     if (!ref?.kind || !ref?.name) return [];
     const resource = kinds[String(ref.kind).toLowerCase()];
-    if (!resource) return [];
+    if (!resource || !ctx.has(resource)) return [];
     if (ctx.get(resource, hpa.metadata.namespace ?? null, ref.name)) return [];
     return [{ message: `HorizontalPodAutoscaler scales ${ref.kind} ${ref.name} which does not exist` }];
   },

@@ -15,12 +15,13 @@ export default defineCheck({
     const ns = obj.metadata.namespace ?? "";
     if (ctx.resource.resource === "gateways") {
       const cls = obj.spec?.gatewayClassName;
-      if (cls && !ctx.get("gatewayclasses.gateway.networking.k8s.io", null, cls)) {
+      if (cls && ctx.has("gatewayclasses.gateway.networking.k8s.io") && !ctx.get("gatewayclasses.gateway.networking.k8s.io", null, cls)) {
         return [{ message: `Gateway uses the GatewayClass ${cls} which does not exist` }];
       }
       return [];
     }
     const findings: Finding[] = [];
+    if (!ctx.has("services")) return [];
     for (const p of obj.spec?.parentRefs ?? []) {
       const kind = p.kind ?? "Gateway";
       if ((p.group ?? "gateway.networking.k8s.io") !== "gateway.networking.k8s.io" || kind !== "Gateway") continue;

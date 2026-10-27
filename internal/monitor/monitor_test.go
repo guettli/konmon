@@ -330,3 +330,38 @@ func TestAbortedEvaluationResendsFiringAlerts(t *testing.T) {
 		t.Errorf("firing alerts must be re-sent after an aborted evaluation, got %d", len(n.firing))
 	}
 }
+
+func TestCheckForSecondsOverridesFor(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "konmon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	engine, err := checks.Load(nil, []checks.Source{{Path: "slow.js", Code: `
+export default { name: "slow", forSeconds: 300, match: { resources: ["jobs.batch"] }, check() { return [{ message: "x" }]; } };`}},
+		checks.Options{Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{synced: true, items: []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", false, "")}}}
+	n := &recordingNotifier{}
+	m := New(Config{
+		Checks: engine, For: time.Minute, EvalInterval: 30 * time.Second, ResendResolved: 15 * time.Minute,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, st, src, n)
+	ctx := context.Background()
+	for _, at := range []time.Duration{0, 2 * time.Minute} {
+		if err := m.Evaluate(ctx, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(n.firing) != 0 {
+		t.Fatalf("must not fire before forSeconds (5m): %d", len(n.firing))
+	}
+	if err := m.Evaluate(ctx, t0.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 {
+		t.Fatalf("must fire after forSeconds: %d", len(n.firing))
+	}
+}

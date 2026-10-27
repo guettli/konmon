@@ -18,3 +18,12 @@ cases:
     related:
       - {resource: poddisruptionbudgets.policy, object: {metadata: {name: b, namespace: default}, spec: {selector: {matchLabels: {app: web}}}}}
     expect: []
+  - name: an empty selector selects every pod
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, labels: {app: web}}
+    related:
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: all, namespace: default}, spec: {selector: {}}}}
+      - {resource: poddisruptionbudgets.policy, object: {metadata: {name: web, namespace: default}, spec: {selector: {matchLabels: {app: web}}}}}
+    expect:
+      - {message: "Pod is selected by 2 PodDisruptionBudgets (all, web): it cannot be evicted"}

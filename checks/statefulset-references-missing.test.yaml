@@ -24,3 +24,11 @@ cases:
       - {resource: services, object: {metadata: {name: db, namespace: default}}}
       - {resource: storageclasses.storage.k8s.io, object: {metadata: {name: fast}}}
     expect: []
+  - name: types not available
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        serviceName: db
+        volumeClaimTemplates: [{spec: {storageClassName: fast}}]
+    expect: []

@@ -21,3 +21,11 @@ cases:
     expect:
       - {key: cfg/b, message: ConfigMap cfg has no key b}
       - {key: gone/, message: ConfigMap gone does not exist}
+  - name: finished pod
+    resource: pods
+    available: [configmaps]
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: app, envFrom: [{configMapRef: {name: pruned}}]}]}
+      status: {phase: Succeeded}
+    expect: []

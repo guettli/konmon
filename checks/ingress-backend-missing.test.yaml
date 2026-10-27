@@ -24,3 +24,12 @@ cases:
       - {key: "gone:80", message: Ingress uses the Service gone which does not exist}
       - {key: "web:8080", message: "Ingress uses port 8080 of Service web, which the Service does not define"}
       - {message: "load balancer port 443: port conflict"}
+  - name: ExternalName service without ports
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: i, namespace: default}
+      spec:
+        rules: [{http: {paths: [{backend: {service: {name: ext, port: {number: 443}}}}]}}]
+    related:
+      - {resource: services, object: {metadata: {name: ext, namespace: default}, spec: {type: ExternalName, externalName: example.com}}}
+    expect: []

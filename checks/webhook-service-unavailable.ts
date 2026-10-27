@@ -19,6 +19,7 @@ export default defineCheck({
   reads: ["services", "endpointslices.discovery.k8s.io"],
   check(cfg, ctx) {
     const findings: Finding[] = [];
+    if (!ctx.has("services")) return [];
     for (const wh of cfg.webhooks ?? []) {
       const ref = wh.clientConfig?.service;
       if (!ref) continue; // URL webhooks are outside the cluster
@@ -37,6 +38,7 @@ export default defineCheck({
         continue;
       }
       if (Object.keys(svc.spec?.selector ?? {}).length === 0 || svc.spec?.type === "ExternalName") continue;
+      if (!ctx.has("endpointslices.discovery.k8s.io")) continue;
       const ready = ctx
         .list("endpointslices.discovery.k8s.io", {
           namespace: ref.namespace,

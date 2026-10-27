@@ -435,7 +435,7 @@ func newFinding(d *Definition, item Item) Finding {
 	return Finding{
 		Check: d.Name, Category: d.Category, Severity: d.Severity,
 		GVR: item.GVR, Kind: item.Obj.GetKind(), Namespace: item.Obj.GetNamespace(), Name: item.Obj.GetName(),
-		UID: string(item.Obj.GetUID()),
+		UID: string(item.Obj.GetUID()), For: d.For,
 	}
 }
 

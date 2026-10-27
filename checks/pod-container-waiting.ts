@@ -21,7 +21,6 @@ const errorReasons = [
 
 export default defineCheck({
   name: "pod-container-waiting",
-  severity: "critical",
   match: { resources: ["pods"] },
   check(pod) {
     const findings = [];

@@ -18,6 +18,8 @@ export default defineCheck({
   reads: ["roles.rbac.authorization.k8s.io", "clusterroles.rbac.authorization.k8s.io"],
   check(b, ctx) {
     const ref = b.roleRef ?? {};
+    const resource = ref.kind === "Role" ? "roles.rbac.authorization.k8s.io" : "clusterroles.rbac.authorization.k8s.io";
+    if (!ctx.has(resource)) return [];
     const role =
       ref.kind === "Role"
         ? ctx.get("roles.rbac.authorization.k8s.io", b.metadata.namespace ?? null, ref.name)

@@ -25,7 +25,14 @@ export default defineCheck({
       if (sc.volumeBindingMode === "WaitForFirstConsumer") {
         const used = ctx
           .list("pods", { namespace: pvc.metadata.namespace })
-          .some((p) => (p.spec?.volumes ?? []).some((v: any) => v.persistentVolumeClaim?.claimName === pvc.metadata.name));
+          .some((p) =>
+            (p.spec?.volumes ?? []).some(
+              (v: any) =>
+                v.persistentVolumeClaim?.claimName === pvc.metadata.name ||
+                // A generic ephemeral volume's claim is named <pod>-<volume>.
+                (v.ephemeral && `${p.metadata.name}-${v.name}` === pvc.metadata.name),
+            ),
+          );
         if (!used) return [];
       }
     }
