@@ -116,3 +116,32 @@ func TestEditorRefusesInvalidFile(t *testing.T) {
 		t.Error("want an error for an invalid file")
 	}
 }
+
+func TestEditorSymlinkAndCommentsOnly(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.yaml")
+	if err := os.WriteFile(target, []byte("# note\n# note2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	e, err := OpenEditor(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AddIgnore(&IgnoreRule{Check: "a", Comment: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link must stay a link: %v %v", info, err)
+	}
+	data, _ := os.ReadFile(target)
+	if !strings.HasPrefix(string(data), "# note\n# note2\n") || !strings.Contains(string(data), "check: a") {
+		t.Errorf("target:\n%s", data)
+	}
+}

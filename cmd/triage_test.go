@@ -35,7 +35,8 @@ func runTriage(t *testing.T, path, input string, findings ...*checks.Finding) st
 	var out bytes.Buffer
 	s := &triageSession{
 		ctx: context.Background(), in: bufio.NewReader(strings.NewReader(input)), out: &out,
-		editor: editor, all: findings, now: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
+		editor: editor, base: &config.Config{}, all: findings, universe: findings,
+		now: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
 	}
 	if err := s.run(); err != nil {
 		t.Fatal(err)
@@ -100,9 +101,11 @@ func TestTriage(t *testing.T) {
 		t.Errorf("image snooze: %+v", r)
 	}
 
-	// A second run asks about nothing: everything is covered.
+	// A second run asks only about Stalled=True: taught healthy when False,
+	// it is still a problem. Everything else is covered.
 	out = runTriage(t, path, "", append(stalled, degraded, pvc, image)...)
-	if !strings.Contains(out, "No changes.") || strings.Contains(out, "[1/") {
+	if !strings.Contains(out, "[1/4] conditions  widgets.example.com  Stalled=True") || strings.Contains(out, "[2/4]") ||
+		strings.Contains(out, "[3/4]") || strings.Contains(out, "[4/4]") {
 		t.Errorf("second run:\n%s", out)
 	}
 }
@@ -121,9 +124,9 @@ func TestTriageLadderCounts(t *testing.T) {
 		"2) these findings in namespace team-a",
 		"hides 2\n",
 		"condition Stalled of widgets.example.com, any status and reason",
-		"hides 3  (+1 of other groups)",
+		"hides 3  (+1 more)",
 		"every conditions finding of widgets.example.com",
-		"hides 4  (+2 of other groups)",
+		"hides 4  (+2 more)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -134,5 +137,57 @@ func TestTriageLadderCounts(t *testing.T) {
 		if strings.Contains(string(data), "ignore:") {
 			t.Errorf("cancel must not write a rule:\n%s", data)
 		}
+	}
+}
+
+func TestTriageTaughtButStillUnhealthyIsAsked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	if err := os.WriteFile(path, []byte("conditions:\n  widgets.example.com: {healthyWhenTrue: [Ready]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Ready=False is a real problem although Ready is taught: triage must ask.
+	out := runTriage(t, path, "n\n", conditionFinding("a", "w1", "Ready", "False", "Down"))
+	if !strings.Contains(out, "[1/1]") {
+		t.Errorf("the group must be shown:\n%s", out)
+	}
+	cfg := &config.Config{Conditions: map[string]*config.ConditionRules{
+		"*":                   {HealthyWhenFalse: []string{"Ready"}},
+		"widgets.example.com": {HealthyWhenTrue: []string{"Ready"}},
+	}}
+	g := &triageGroup{check: "conditions", resource: "widgets.example.com", condition: "Ready", status: "False"}
+	if healthyByPolarity(cfg, g) {
+		t.Error("the rule of the resource wins over *")
+	}
+	g.status = "True"
+	if !healthyByPolarity(cfg, g) {
+		t.Error("Ready=True is healthy by the rule of the resource")
+	}
+}
+
+func TestTriageCheckErrorLadder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	f := &checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Severity: "warning", Key: "boom", Message: "check boom failed"}
+	out := runTriage(t, path, "i\nc\nq\n", f)
+	if !strings.Contains(out, "1) only failures of check boom") || strings.Contains(out, "every finding of check") {
+		t.Errorf("ladder for a check-error:\n%s", out)
+	}
+}
+
+func TestTriageRejectsPastUntil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	out := runTriage(t, path, "s\n2020-01-01\n3d\n\n", conditionFinding("a", "w1", "Ready", "False", "Down"))
+	if !strings.Contains(out, "That day is in the past.") {
+		t.Errorf("want a hint:\n%s", out)
+	}
+	cfg, err := config.Load([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ignore) != 1 || cfg.Ignore[0].Until != "2026-10-30" {
+		t.Errorf("rules: %+v", cfg.Ignore)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("mode of a new file: %v", info.Mode())
 	}
 }

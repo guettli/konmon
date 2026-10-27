@@ -261,9 +261,9 @@ $ konmon triage --context prod --config konmon.yaml
   1) only team-a/widget-1                                         hides 1
   2) these findings in namespace team-a                           hides 3
   3) these findings everywhere                                    hides 12
-  4) condition Stalled of widgets.example.com, any status and reason  hides 14  (+2 of other groups)
-  5) every conditions finding of widgets.example.com              hides 15  (+3 of other groups)
-  6) every finding of check conditions                            hides 40  (+28 of other groups)
+  4) condition Stalled of widgets.example.com, any status and reason  hides 14  (+2 more)
+  5) every conditions finding of widgets.example.com              hides 15  (+3 more)
+  6) every finding of check conditions                            hides 40  (+28 more)
 ```
 
 - **t** teaches the polarity (for this resource type or all), **i** ignores with the scope you pick (each with the number of findings it hides), a required comment and an optional expiry. **s** snoozes (an ignore rule with `until`, default 7 days), **k** keeps a real problem (`acknowledged:`, still alerts, not asked again), **?** shows the objects and, with `--from-db`/`--use-db`, the condition history.

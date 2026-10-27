@@ -27,6 +27,11 @@ const header = `# konmon config: ignore rules and condition polarity.
 // OpenEditor reads the config file at path; a missing file is a new, empty
 // config.
 func OpenEditor(path string) (*Editor, error) {
+	// Write the target of a symlink (e.g. into a dotfiles or gitops repo),
+	// not over the link.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	e := &Editor{path: path}
 	data, err := os.ReadFile(path)
 	isNew := errors.Is(err, os.ErrNotExist)
@@ -40,8 +45,8 @@ func OpenEditor(path string) (*Editor, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if doc.Kind == 0 { // empty or comments only
-		doc = yaml.Node{Kind: yaml.DocumentNode, HeadComment: doc.HeadComment}
+	if doc.Kind == 0 { // empty or comments only: keep the comments
+		doc = yaml.Node{Kind: yaml.DocumentNode, HeadComment: strings.TrimSpace(string(data))}
 	}
 	if len(doc.Content) == 0 {
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
@@ -134,7 +139,9 @@ func (e *Editor) Teach(resource, list string, types []string) error {
 		i += 2
 	}
 	seq := value(rules, list, yaml.SequenceNode)
-	seq.Style = yaml.FlowStyle
+	if len(seq.Content) == 0 {
+		seq.Style = yaml.FlowStyle // new lists: [A, B]; existing ones keep their style
+	}
 	for _, t := range types {
 		if !slices.ContainsFunc(seq.Content, func(n *yaml.Node) bool { return n.Value == t }) {
 			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: t})
@@ -191,11 +198,19 @@ func (e *Editor) Save() error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	mode := os.FileMode(0o644) // a config file, no secrets
 	if info, err := os.Stat(e.path); err == nil {
-		_ = os.Chmod(tmp.Name(), info.Mode().Perm())
+		mode = info.Mode().Perm()
+	}
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
+		return err
 	}
 	return os.Rename(tmp.Name(), e.path)
 }

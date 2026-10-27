@@ -68,33 +68,44 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 		return err
 	}
 	if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
-		if err := editor.Save(); err != nil {
-			return err
-		}
+		// Created on the first answer; until then it has no rules.
+		triageOpts.checks.configs = configs[:len(configs)-1]
 	}
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	base, err := triageOpts.checks.config()
+	if err != nil {
+		return err
+	}
 
-	var findings []*checks.Finding
+	// Ctrl-C while listing aborts; at the prompt it ends the program, the
+	// answers are already saved.
+	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+
+	// findings are triaged; universe (not narrowed by -n) is what the
+	// counts of the ignore ladder are based on.
+	var findings, universe []*checks.Finding
 	now := time.Now()
 	var st *store.Store
 	if triageFromDB || triageOpts.useDB {
 		st, err = store.OpenExisting(ctx, dbPath)
 		if err != nil {
+			stop()
 			return err
 		}
 		defer func() { _ = st.Close() }()
 	}
 	if triageFromDB {
 		if err := triageOpts.filter.validate(); err != nil {
+			stop()
 			return err
 		}
 		ignore, err := triageOpts.checks.ignorer()
 		if err != nil {
+			stop()
 			return err
 		}
-		rows, err := st.FindingsAt(ctx, now)
+		rows, err := st.FindingsAt(sigCtx, now)
 		if err != nil {
+			stop()
 			return err
 		}
 		for i := range rows {
@@ -102,21 +113,36 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 			if len(only) > 0 && !matchGlob(f.Check, only) {
 				continue
 			}
-			if triageOpts.filter.match(f) && ignore.ignored(f, now) == "" {
+			if f.Namespace != "" && matchGlob(f.Namespace, triageOpts.checks.excludeNamespaces) {
+				continue
+			}
+			if ignore.ignored(f, now) != "" {
+				continue
+			}
+			universe = append(universe, f)
+			if triageOpts.filter.match(f) {
 				findings = append(findings, f)
 			}
 		}
 	} else {
-		run, err := runChecks(ctx, &triageOpts, only)
+		run, err := runChecks(sigCtx, &triageOpts, only)
 		if err != nil {
+			stop()
 			return err
 		}
 		findings, now = run.findings, run.now
+		for i := range run.result.Findings {
+			if f := &run.result.Findings[i]; run.ignore.ignored(f, now) == "" {
+				universe = append(universe, f)
+			}
+		}
 	}
+	stop()
 
 	t := &triageSession{
 		in: bufio.NewReader(cmd.InOrStdin()), out: cmd.OutOrStdout(),
-		editor: editor, all: findings, now: now, store: st, ctx: ctx,
+		editor: editor, base: base, all: findings, universe: universe, now: now, store: st, ctx: ctx,
+		narrowed: len(only) > 0 || len(triageOpts.filter.categories) > 0,
 	}
 	return t.run()
 }
@@ -186,14 +212,22 @@ func findingObject(f *checks.Finding) string {
 }
 
 type triageSession struct {
-	ctx     context.Context
-	in      *bufio.Reader
-	out     io.Writer
-	editor  *config.Editor
-	all     []*checks.Finding
-	now     time.Time
-	store   *store.Store // nil: no history
-	changes int
+	ctx    context.Context
+	in     *bufio.Reader
+	out    io.Writer
+	editor *config.Editor
+	// base is the config of all --config files when the session started,
+	// for acknowledged rules of earlier files.
+	base *config.Config
+	all  []*checks.Finding
+	// universe are all findings of the run which are not ignored, also
+	// outside -n: the rules are not limited to it.
+	universe []*checks.Finding
+	// narrowed: only some checks ran, the counts may be too low.
+	narrowed bool
+	now      time.Time
+	store    *store.Store // nil: no history
+	changes  int
 }
 
 var errQuit = errors.New("quit")
@@ -246,10 +280,10 @@ func (t *triageSession) run() error {
 // the group.
 func (t *triageSession) covered(g *triageGroup, cfg *config.Config) bool {
 	for _, f := range g.findings {
-		if cfg.Ignored(f, t.now) != nil || cfg.IsAcknowledged(f, t.now) != nil {
+		if cfg.Ignored(f, t.now) != nil || cfg.IsAcknowledged(f, t.now) != nil || t.base.IsAcknowledged(f, t.now) != nil {
 			continue
 		}
-		if g.check == "conditions" && g.condition != "" && taughtAll(cfg, g.resource, strings.Split(g.condition, "/")) {
+		if g.check == "conditions" && g.condition != "" && healthyByPolarity(cfg, g) {
 			continue
 		}
 		return false
@@ -257,16 +291,27 @@ func (t *triageSession) covered(g *triageGroup, cfg *config.Config) bool {
 	return true
 }
 
-func taughtAll(cfg *config.Config, resource string, types []string) bool {
-	for _, typ := range types {
-		found := false
-		for _, key := range []string{resource, "*"} {
+// healthyByPolarity reports whether the taught polarity makes every
+// condition type of the group healthy with its status, like taught() in
+// checks/conditions.ts: the rules of the resource first, then "*".
+func healthyByPolarity(cfg *config.Config, g *triageGroup) bool {
+	for _, typ := range strings.Split(g.condition, "/") {
+		verdict := ""
+		for _, key := range []string{g.resource, "*"} {
 			r := cfg.Conditions[key]
-			if r != nil && (slices.Contains(r.HealthyWhenTrue, typ) || slices.Contains(r.HealthyWhenFalse, typ) || slices.Contains(r.IgnoreTypes, typ)) {
-				found = true
+			if r == nil || verdict != "" {
+				continue
+			}
+			switch {
+			case slices.Contains(r.IgnoreTypes, typ):
+				verdict = "skip"
+			case slices.Contains(r.HealthyWhenTrue, typ):
+				verdict = "True"
+			case slices.Contains(r.HealthyWhenFalse, typ):
+				verdict = "False"
 			}
 		}
-		if !found {
+		if verdict != "skip" && verdict != g.status {
 			return false
 		}
 	}
@@ -295,7 +340,7 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 	canTeach := g.check == "conditions" && g.condition != ""
 	options := "  i) ignore   s) snooze   k) keep (real problem)   ?) details   n) next   q) quit\n> "
 	if canTeach {
-		options = "  t) teach polarity" + options[1:]
+		options = "  t) teach polarity  " + options[2:]
 	}
 	for {
 		answer, err := t.ask(options)
@@ -305,6 +350,7 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 		switch answer {
 		case "t":
 			if !canTeach {
+				t.printf("  Only conditions findings can be taught.\n")
 				continue
 			}
 			done, err := t.teach(g)
@@ -332,6 +378,8 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 			return nil
 		case "q":
 			return errQuit
+		default:
+			t.printf("  Unknown answer %q.\n", answer)
 		}
 	}
 }
@@ -344,6 +392,9 @@ func (t *triageSession) teach(g *triageGroup) (bool, error) {
 	}
 	list := map[string]string{"t": config.HealthyWhenTrue, "f": config.HealthyWhenFalse, "b": config.IgnoreTypes}[answer]
 	if list == "" {
+		if answer != "c" {
+			t.printf("  Unknown answer %q, nothing changed.\n", answer)
+		}
 		return false, nil
 	}
 	answer, err = t.ask(fmt.Sprintf("  For which resources? r) %s (default)  a) all resources\n> ", g.resource))
@@ -399,12 +450,17 @@ func (t *triageSession) ladder(g *triageGroup) []rung {
 			}
 		}
 		count := 0
-		for _, other := range t.all {
+		for _, other := range t.universe {
 			if r.Match(other, t.now) {
 				count++
 			}
 		}
 		rungs = append(rungs, rung{label: label, rule: r, count: count})
+	}
+	if f.Check == checks.ErrorCheck {
+		// Never offer to hide every failing check with one key.
+		add("only failures of check "+f.Key, config.IgnoreRule{Check: f.Check, Key: f.Key})
+		return rungs
 	}
 	add("only "+findingObject(f), config.IgnoreRule{Check: f.Check, Resource: g.resource, Namespace: f.Namespace, Name: f.Name, Key: f.Key})
 	if f.Namespace != "" {
@@ -431,10 +487,13 @@ func sameRule(a, b *config.IgnoreRule) bool {
 func (t *triageSession) ignore(g *triageGroup) (bool, error) {
 	rungs := t.ladder(g)
 	t.printf("  Ignore which findings?\n")
+	if t.narrowed {
+		t.printf("  (counts include only the checks of this run)\n")
+	}
 	for i, r := range rungs {
 		extra := ""
 		if r.count > len(g.findings) {
-			extra = fmt.Sprintf("  (+%d of other groups)", r.count-len(g.findings))
+			extra = fmt.Sprintf("  (+%d more)", r.count-len(g.findings))
 		}
 		t.printf("  %d) %-60s hides %d%s\n", i+1, r.label, r.count, extra)
 	}
@@ -542,7 +601,11 @@ func (t *triageSession) until(prompt, def string) (string, error) {
 				return t.now.UTC().AddDate(0, 0, n).Format(time.DateOnly), nil
 			}
 		}
-		if _, err := time.Parse(time.DateOnly, answer); err == nil {
+		if d, err := time.Parse(time.DateOnly, answer); err == nil {
+			if d.Before(t.now.UTC().Truncate(24 * time.Hour)) {
+				t.printf("  That day is in the past.\n")
+				continue
+			}
 			return answer, nil
 		}
 		t.printf("  Want YYYY-MM-DD or a number of days like 30d.\n")
