@@ -2,10 +2,17 @@ name: CI
 
 # Pull requests, and pushes to main (the release workflow runs after CI on
 # main). Other branches get CI through their pull request.
+#
+# Each job has its own Go cache key: jobs which share one fight over it,
+# and only one of them saves it.
 on:
   pull_request:
   push:
     branches: [main]
+  # Weekly, for new vulnerabilities (govulncheck) without a change here.
+  # The release only runs after a push.
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
@@ -19,6 +26,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,16 +51,14 @@ jobs:
       - name: Test core and example checks
         run: go run . checks test --checks examples
 
-      - name: Build all release targets
-        # The same targets as the release workflow, so a platform-specific
-        # build error shows up in the pull request.
-        run: |
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null .
-          done
+      - name: Build all release targets (make build-all)
+        # The targets of the release workflow, so a platform-specific build
+        # error shows up in the pull request.
+        run: make build-all
 
   typescript:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,12 +67,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
 
       - name: Type-check and formatting (make typescript)
         run: make typescript
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,6 +83,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: golangci-lint, actionlint, govulncheck, go mod tidy (make lint)
         # govulncheck fails on vulnerabilities which the code can reach,
@@ -86,6 +97,7 @@ jobs:
     # The release builds the image from the release binaries; build it here
     # too, so a broken Dockerfile shows up before the release.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,6 +106,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false # one small build
 
       - name: Build binary
         run: |

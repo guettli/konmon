@@ -1,4 +1,6 @@
-# Weekly updates of Go modules and GitHub Actions (pinned by commit SHA).
+# Weekly updates of Go modules, the tools (tools/go.mod, package.json) and
+# GitHub Actions (pinned by commit SHA). The Go toolchain line in go.mod is
+# not updated by Dependabot: the weekly govulncheck run of CI tells.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -18,6 +20,24 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ["*"]
+    cooldown:
+      default-days: 14
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule:
+      interval: weekly
+    groups:
+      tools:
+        patterns: ["*"]
+    cooldown:
+      default-days: 14
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
         patterns: ["*"]
     cooldown:
       default-days: 14

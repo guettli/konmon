@@ -1,30 +1,42 @@
-# The same checks as CI. `make check` before a pull request.
-GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-ACTIONLINT := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
-TSC := npx -y -p typescript@5.9.3 tsc
-PRETTIER := npx -y prettier@3.6.2
+# The checks of CI. `make check` before a pull request.
+# Tool versions: tools/go.mod and package.json (updated by Dependabot).
+GO_TOOL := go tool -modfile=tools/go.mod
+GOLANGCI_LINT := $(GO_TOOL) golangci-lint
+ACTIONLINT := $(GO_TOOL) actionlint
+GOVULNCHECK := $(GO_TOOL) govulncheck
+TSC := npx --no-install tsc
+PRETTIER := npx --no-install prettier
 
-.PHONY: check test lint typescript fmt
+.PHONY: check test build-all lint typescript fmt
 
-check: test lint typescript
+check: test build-all lint typescript
 
 test:
 	go test -race ./...
 	go run . checks test --checks examples
+
+# The targets of the release.
+build-all:
+	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+		CGO_ENABLED=0 GOOS=$${target%/*} GOARCH=$${target#*/} go build -trimpath -o /dev/null . || exit 1; \
+	done
 
 lint:
 	$(GOLANGCI_LINT) run
 	$(ACTIONLINT)
 	$(GOVULNCHECK) ./...
 	go mod tidy && git diff --exit-code go.mod go.sum
+	cd tools && go mod tidy && git diff --exit-code go.mod go.sum
 
-typescript:
+node_modules: package.json package-lock.json
+	npm ci --ignore-scripts --no-audit --no-fund
+
+typescript: node_modules
 	cd checks && $(TSC) -p .
 	cd examples && $(TSC) -p .
 	$(PRETTIER) --check 'checks/*.ts' 'examples/*.ts'
 
 # Fix formatting of Go and TypeScript.
-fmt:
+fmt: node_modules
 	$(GOLANGCI_LINT) fmt
 	$(PRETTIER) --write 'checks/*.ts' 'examples/*.ts'
