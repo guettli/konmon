@@ -10,14 +10,17 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/pager"
 )
 
 // Upsert is sent when an object was added or changed.
@@ -137,11 +140,101 @@ func (w *Watcher) Snapshot() []Item {
 	return items
 }
 
+// Available returns the types whose informers have synced.
+func (w *Watcher) Available() []schema.GroupVersionResource {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result := make([]schema.GroupVersionResource, 0, len(w.informers))
+	for _, r := range w.informers {
+		select {
+		case <-r.synced:
+			result = append(result, r.gvr)
+		default:
+		}
+	}
+	return result
+}
+
+// ListResult is the outcome of ListOnce.
+type ListResult struct {
+	Items     []Item
+	Available []schema.GroupVersionResource
+	// Forbidden types may not be listed (RBAC).
+	Forbidden []schema.GroupVersionResource
+	// Failed lists types (or API groups) which could not be listed or
+	// discovered for other reasons.
+	Failed []error
+}
+
+// ListOnce lists all objects of all included types once, without
+// informers, for an ad hoc check.
+func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
+	gvrs, partialErr, err := w.discover()
+	if err != nil {
+		return nil, err
+	}
+	res := &ListResult{}
+	if partialErr != nil {
+		res.Failed = append(res.Failed, partialErr)
+	}
+	type result struct {
+		gvr       schema.GroupVersionResource
+		items     []Item
+		forbidden bool
+		err       error
+	}
+	results := make([]result, len(gvrs))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for i, gvr := range gvrs {
+		g.Go(func() error {
+			r := result{gvr: gvr}
+			p := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+				return w.Dynamic.Resource(gvr).List(ctx, opts)
+			})
+			err := p.EachListItem(gctx, metav1.ListOptions{}, func(obj runtime.Object) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok {
+					u.SetManagedFields(nil)
+					r.items = append(r.items, Item{GVR: gvr, Obj: u})
+				}
+				return nil
+			})
+			switch {
+			case err == nil:
+			case apierrors.IsForbidden(err):
+				r.forbidden = true
+			case apierrors.IsNotFound(err), apierrors.IsMethodNotSupported(err):
+			default:
+				r.err = fmt.Errorf("list %s: %w", gvr.String(), err)
+			}
+			results[i] = r
+			return nil
+		})
+	}
+	_ = g.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, r := range results {
+		switch {
+		case r.forbidden:
+			res.Forbidden = append(res.Forbidden, r.gvr)
+		case r.err != nil:
+			res.Failed = append(res.Failed, r.err)
+		default:
+			res.Items = append(res.Items, r.items...)
+			res.Available = append(res.Available, r.gvr)
+		}
+	}
+	return res, nil
+}
+
 func (w *Watcher) refresh(ctx context.Context) error {
-	gvrs, partial, err := w.discover()
+	gvrs, partialErr, err := w.discover()
 	if err != nil {
 		return err
 	}
+	partial := partialErr != nil
 	wanted := make(map[schema.GroupResource]schema.GroupVersionResource, len(gvrs))
 	for _, gvr := range gvrs {
 		wanted[gvr.GroupResource()] = gvr
@@ -201,19 +294,19 @@ func (w *Watcher) refresh(ctx context.Context) error {
 }
 
 // discover returns the preferred version of every listable and watchable
-// resource type accepted by Include. partial is true if some API groups
+// resource type accepted by Include. partialErr is set if some API groups
 // could not be discovered.
-func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partial bool, err error) {
+func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partialErr, err error) {
 	// The package-level helper is what DiscoveryClient.ServerPreferredResources
 	// uses; calling it directly also works with the fake discovery client.
 	lists, err := discovery.ServerPreferredResources(w.Discovery)
 	if err != nil {
 		if !discovery.IsGroupDiscoveryFailedError(err) || len(lists) == 0 {
-			return nil, false, fmt.Errorf("server preferred resources: %w", err)
+			return nil, nil, fmt.Errorf("server preferred resources: %w", err)
 		}
 		// Some API groups (often an orphaned APIService) failed. Go on with the rest.
 		w.Log.Warn("partial discovery", "err", err)
-		partial = true
+		partialErr = fmt.Errorf("discovery: %w", err)
 	}
 	for _, list := range lists {
 		gv, err := schema.ParseGroupVersion(list.GroupVersion)
@@ -232,7 +325,7 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partial bool, 
 			gvrs = append(gvrs, gvr)
 		}
 	}
-	return gvrs, partial, nil
+	return gvrs, partialErr, nil
 }
 
 func hasVerbs(verbs metav1.Verbs, want ...string) bool {

@@ -24,6 +24,26 @@ jobs:
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -o /dev/null .
 
+      - name: Test core and example checks
+        run: go run . checks test --checks examples
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Type-check core checks
+        working-directory: checks
+        run: npx -y -p typescript@5.9.3 tsc -p .
+
+      - name: Type-check example checks
+        working-directory: examples
+        run: npx -y -p typescript@5.9.3 tsc -p .
+
   lint:
     runs-on: ubuntu-latest
     steps:

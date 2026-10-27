@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/store"
 	"github.com/guettli/konmon/internal/watch"
 )
@@ -29,6 +29,9 @@ type fakeSource struct {
 
 func (f *fakeSource) Synced() bool           { return f.synced }
 func (f *fakeSource) Snapshot() []watch.Item { return f.items }
+func (f *fakeSource) Available() []schema.GroupVersionResource {
+	return []schema.GroupVersionResource{jobsGVR}
+}
 
 type recordingNotifier struct {
 	firing, resolved []store.FindingRow
@@ -62,15 +65,43 @@ func job(name, uid string, failed bool, heartbeat string) *unstructured.Unstruct
 	return obj
 }
 
+// flaky throws for jobs named "flaky" whose Failed condition is False, so
+// tests can make a check fail for an object that had findings.
+const flaky = `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "flaky",
+  match: { resources: ["jobs.batch"] },
+  check(job) {
+    if (job.metadata.name !== "flaky") return [];
+    if (job.status.conditions[0].status === "False") throw new Error("boom");
+    return [{ message: "job failed" }];
+  },
+});`
+
+const tidy = `
+export default {
+  name: "tidy",
+  category: "hygiene",
+  match: { resources: ["jobs.batch"] },
+  check(job) { return [{ message: "jobs should have labels" }]; },
+};`
+
 func newTestMonitor(t *testing.T, src Source, n Notifier) (*Monitor, *store.Store) {
 	t.Helper()
+	engine, err := checks.Load(checks.CoreFiles().Sources, []checks.Source{
+		{Path: "flaky.ts", Code: flaky}, {Path: "tidy.js", Code: tidy},
+	}, checks.Options{Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "konmon.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	m := New(Config{
-		Args:              &checkconditions.Arguments{},
+		Checks:            engine,
 		ExcludeNamespaces: []string{"ignored-*"},
 		StoreRevisions:    func(schema.GroupResource) bool { return true },
 		For:               time.Minute,
@@ -216,5 +247,86 @@ func TestEvaluateDoesNotReportPendingResolved(t *testing.T) {
 	}
 	if len(n.resolved) != 0 {
 		t.Errorf("a finding which never fired must not be sent as resolved: %+v", n.resolved)
+	}
+}
+
+func firingChecks(rows []store.FindingRow) []string {
+	result := make([]string, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, r.Finding.Check+" "+r.Finding.Name)
+	}
+	return result
+}
+
+func TestEvaluateKeepsFindingsOfFailedChecksAndSkipsHygiene(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, st := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("flaky", "u1", true, "")}}
+	if err := m.Evaluate(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Evaluate(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := firingChecks(n.firing); len(got) != 2 || got[0] != "conditions flaky" || got[1] != "flaky flaky" {
+		t.Fatalf("want conditions and flaky firing (not the hygiene check), got %v", got)
+	}
+
+	// The check throws now: its finding must stay open with its start
+	// time, and a check-error finding opens.
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("flaky", "u1", false, "")}}
+	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	open, err := st.FindingsAt(ctx, t0.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(open))
+	for _, r := range open {
+		names = append(names, r.Finding.Check)
+		if r.Finding.Check == "flaky" && !r.FirstSeen.Equal(t0) {
+			t.Errorf("flaky finding was reopened: %+v", r)
+		}
+	}
+	want := map[string]bool{"flaky": true, checks.ErrorCheck: true, "tidy": true}
+	if len(names) != len(want) {
+		t.Fatalf("open findings: %v", names)
+	}
+	for _, name := range names {
+		if !want[name] {
+			t.Errorf("unexpected open finding %s", name)
+		}
+	}
+	if len(n.resolved) != 1 || n.resolved[0].Finding.Check != "conditions" {
+		t.Errorf("only the conditions finding is resolved: %+v", n.resolved)
+	}
+}
+
+func TestAbortedEvaluationResendsFiringAlerts(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	if err := m.Evaluate(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Evaluate(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 {
+		t.Fatalf("want 1 firing, got %d", len(n.firing))
+	}
+	n.firing = nil
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := m.Evaluate(cancelled, t0.Add(2*time.Minute)); err == nil {
+		t.Fatal("want an error for an aborted evaluation")
+	}
+	if len(n.firing) != 1 {
+		t.Errorf("firing alerts must be re-sent after an aborted evaluation, got %d", len(n.firing))
 	}
 }

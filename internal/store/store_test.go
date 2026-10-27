@@ -3,12 +3,13 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/guettli/check-conditions/pkg/checkconditions"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/guettli/konmon/internal/checks"
 )
 
 var t0 = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
@@ -134,20 +135,20 @@ func TestMarkMissingDeleted(t *testing.T) {
 	}
 }
 
-func finding(name string) checkconditions.Finding {
-	return checkconditions.Finding{
-		Kind: checkconditions.FindingCondition, GVR: podRef.GVR, Namespace: "ns", Name: name,
-		UID: types.UID("uid-" + name), ConditionTypes: []string{"Ready"}, Status: "False",
+func finding(name string) checks.Finding {
+	return checks.Finding{
+		Check: "conditions", Category: checks.CategoryHealth, GVR: podRef.GVR, Namespace: "ns", Name: name,
+		UID: "uid-" + name, Key: "Ready", Condition: "Ready", Message: "Condition Ready=False",
 	}
 }
 
 func TestSyncFindingsOpensAndResolves(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	sync := func(at time.Time, fs ...checkconditions.Finding) (open, resolved []FindingRow) {
+	sync := func(at time.Time, fs ...checks.Finding) (open, resolved []FindingRow) {
 		update(t, s, func(tx *Tx) error {
 			var err error
-			open, resolved, err = tx.SyncFindings(fs, at)
+			open, resolved, err = tx.SyncFindings(fs, nil, at)
 			return err
 		})
 		return open, resolved
@@ -186,6 +187,58 @@ func TestSyncFindingsOpensAndResolves(t *testing.T) {
 	}
 }
 
+func TestSyncFindingsKeepsFindingsOfFailedChecks(t *testing.T) {
+	s := openTestStore(t)
+	update(t, s, func(tx *Tx) error {
+		_, _, err := tx.SyncFindings([]checks.Finding{finding("a"), finding("b")}, nil, t0)
+		return err
+	})
+	var open, resolved []FindingRow
+	update(t, s, func(tx *Tx) error {
+		var err error
+		open, resolved, err = tx.SyncFindings(nil, func(r *FindingRow) bool { return r.Finding.Name == "a" }, t0.Add(time.Minute))
+		return err
+	})
+	if len(open) != 1 || open[0].Finding.Name != "a" || !open[0].FirstSeen.Equal(t0) {
+		t.Errorf("a should stay open since t0: %+v", open)
+	}
+	if len(resolved) != 1 || resolved[0].Finding.Name != "b" {
+		t.Errorf("b should be resolved: %+v", resolved)
+	}
+}
+
+func TestConditionHistorySinceAndObjects(t *testing.T) {
+	s := openTestStore(t)
+	update(t, s, func(tx *Tx) error {
+		if _, err := tx.UpsertObject(podRef, "1", "h", []byte(`{"kind":"Pod"}`), false, t0); err != nil {
+			return err
+		}
+		if _, err := tx.UpdateConditions("uid-1", []Condition{{Type: "Ready", Status: "False"}}, t0); err != nil {
+			return err
+		}
+		_, err := tx.UpdateConditions("uid-1", []Condition{{Type: "Ready", Status: "True"}}, t0.Add(time.Hour))
+		return err
+	})
+	h, err := s.ConditionHistorySince(context.Background(), t0.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h["uid-1"]) != 1 || h["uid-1"][0].Status != "True" {
+		t.Errorf("history: %+v", h)
+	}
+	var seen []string
+	err = s.Objects(context.Background(), func(ref ObjectRef, data []byte) error {
+		seen = append(seen, ref.Name+" "+string(data))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != `p1 {"kind":"Pod"}` {
+		t.Errorf("objects: %v", seen)
+	}
+}
+
 func TestPrune(t *testing.T) {
 	s := openTestStore(t)
 	update(t, s, func(tx *Tx) error {
@@ -204,4 +257,19 @@ func TestPrune(t *testing.T) {
 		}
 		return err
 	})
+}
+
+func TestOpenRefusesDevelopmentSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(context.Background(), "PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if _, err := Open(context.Background(), path); err == nil || !strings.Contains(err.Error(), "development version") {
+		t.Errorf("want an error for schema version 1, got %v", err)
+	}
 }

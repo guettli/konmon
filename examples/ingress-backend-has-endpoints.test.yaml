@@ -1,0 +1,49 @@
+check: ingress-backend-has-endpoints
+cases:
+  - name: backend without ready endpoints
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: shop, namespace: default}
+      spec:
+        rules:
+          - http:
+              paths:
+                - backend: {service: {name: web}}
+                - backend: {service: {name: api}}
+    related:
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: web-1, namespace: default, labels: {kubernetes.io/service-name: web}}
+          endpoints:
+            - {addresses: [10.0.0.1], conditions: {ready: false}}
+      - resource: endpointslices.discovery.k8s.io
+        object:
+          metadata: {name: api-1, namespace: default, labels: {kubernetes.io/service-name: api}}
+          endpoints:
+            - {addresses: [10.0.0.2], conditions: {ready: true}}
+    expect:
+      - {key: web, message: backend web has 0 ready endpoints}
+
+  - name: no endpoint slices at all
+    resource: ingresses.networking.k8s.io
+    available: [endpointslices.discovery.k8s.io]
+    object:
+      metadata: {name: shop, namespace: default}
+      spec:
+        rules:
+          - http:
+              paths:
+                - backend: {service: {name: web}}
+    expect:
+      - {key: web}
+
+  - name: EndpointSlices not watched
+    resource: ingresses.networking.k8s.io
+    object:
+      metadata: {name: shop, namespace: default}
+      spec:
+        rules:
+          - http:
+              paths:
+                - backend: {service: {name: web}}
+    expectError: not available

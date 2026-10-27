@@ -1,0 +1,36 @@
+check: deletion-timestamp
+cases:
+  - name: stuck in deletion
+    resource: persistentvolumeclaims
+    now: 2026-01-01T01:00:00Z
+    object:
+      metadata:
+        name: data
+        namespace: default
+        deletionTimestamp: "2026-01-01T00:00:00Z"
+        finalizers: [kubernetes.io/pvc-protection]
+    expect:
+      - message: DeletionTimestamp set
+        since: "2026-01-01T00:00:00Z"
+        details: {finalizers: kubernetes.io/pvc-protection}
+
+  - name: recently deleted
+    resource: persistentvolumeclaims
+    now: 2026-01-01T00:05:00Z
+    object:
+      metadata: {name: data, namespace: default, deletionTimestamp: "2026-01-01T00:00:00Z"}
+    expect: []
+
+  - name: not deleted
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+    expect: []
+
+  - name: disabled
+    resource: persistentvolumeclaims
+    now: 2026-01-01T01:00:00Z
+    params: {olderThanSeconds: 0}
+    object:
+      metadata: {name: data, namespace: default, deletionTimestamp: "2026-01-01T00:00:00Z"}
+    expect: []
