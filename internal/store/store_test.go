@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -272,4 +273,33 @@ func TestOpenRefusesDevelopmentSchema(t *testing.T) {
 	if _, err := Open(context.Background(), path); err == nil || !strings.Contains(err.Error(), "development version") {
 		t.Errorf("want an error for schema version 1, got %v", err)
 	}
+}
+
+func TestOpenExisting(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.db")
+	if _, err := OpenExisting(context.Background(), missing); err == nil {
+		t.Error("want an error for a missing file")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("OpenExisting created %s", missing)
+	}
+	empty := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(context.Background(), empty); err == nil || !strings.Contains(err.Error(), "not a konmon database") {
+		t.Errorf("want an error for an empty file, got %v", err)
+	}
+	path := filepath.Join(dir, "konmon.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
 }

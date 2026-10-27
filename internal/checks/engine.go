@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -19,6 +20,13 @@ import (
 type Options struct {
 	// Disabled are glob patterns of check names to drop.
 	Disabled []string
+	// Only are glob patterns of the check names to keep; empty keeps all.
+	// A pattern which matches no check is an error (a typo would otherwise
+	// run no check at all).
+	Only []string
+	// Categories keeps only the checks of these categories; empty keeps
+	// all.
+	Categories []string
 	// Params overrides parameters: check name → param → value (JSON or a
 	// plain string).
 	Params map[string]map[string]string
@@ -89,10 +97,16 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 			return nil, fmt.Errorf("params for unknown check %q", name)
 		}
 	}
+	for _, p := range opts.Only {
+		if !slices.ContainsFunc(order, func(name string) bool { return globMatch(name, []string{p}) }) {
+			return nil, fmt.Errorf("no check matches %q", p)
+		}
+	}
 	e := &Engine{opts: opts}
 	for _, name := range order {
 		d := byName[name]
-		if globMatch(name, opts.Disabled) {
+		if globMatch(name, opts.Disabled) || (len(opts.Only) > 0 && !globMatch(name, opts.Only)) ||
+			(len(opts.Categories) > 0 && !slices.Contains(opts.Categories, d.Category)) {
 			continue
 		}
 		if err := d.setParams(opts.Params[name]); err != nil {

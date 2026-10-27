@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -27,7 +28,7 @@ import (
 )
 
 var runOpts struct {
-	kubeContext          string
+	kube                 kubeFlags
 	clusterName          string
 	checks               checkFlags
 	historyWindow        time.Duration
@@ -61,7 +62,7 @@ in-cluster config is used when running in a Pod.`,
 
 func init() {
 	f := runCmd.Flags()
-	f.StringVar(&runOpts.kubeContext, "context", "", "Kubeconfig context to use. Default: current context.")
+	runOpts.kube.register(f)
 	f.StringVar(&runOpts.clusterName, "cluster-name", "", "Value of the 'cluster' label of alerts. Empty: no label.")
 	runOpts.checks.register(f)
 	f.DurationVar(&runOpts.historyWindow, "history-window", 24*time.Hour, "How much condition history checks which use ctx.history can see.")
@@ -96,10 +97,22 @@ func globMatcher(patterns []string) (func(schema.GroupResource) bool, error) {
 	}, nil
 }
 
-// clients builds the Kubernetes clients for a kubeconfig context.
-func clients(kubeContext string) (*rest.Config, dynamic.Interface, discovery.DiscoveryInterface, error) {
+// kubeFlags select the cluster, like kubectl.
+type kubeFlags struct {
+	kubeconfig string
+	context    string
+}
+
+func (k *kubeFlags) register(f *pflag.FlagSet) {
+	f.StringVar(&k.kubeconfig, "kubeconfig", "", "Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.")
+	f.StringVar(&k.context, "context", "", "Kubeconfig context to use. Default: current context.")
+}
+
+// clients builds the Kubernetes clients.
+func (k *kubeFlags) clients() (*rest.Config, dynamic.Interface, discovery.DiscoveryInterface, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: kubeContext}
+	loadingRules.ExplicitPath = k.kubeconfig
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: k.context}
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("kubeconfig: %w", err)
@@ -126,7 +139,7 @@ func run(ctx context.Context) error {
 	// client-go logs reflector errors with klog; send them to our logger.
 	klog.SetSlogLogger(log)
 
-	engine, _, err := runOpts.checks.engine(log)
+	engine, _, err := runOpts.checks.engine(log, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -139,7 +152,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("--no-revisions-for: %w", err)
 	}
 
-	config, dyn, disc, err := clients(runOpts.kubeContext)
+	config, dyn, disc, err := runOpts.kube.clients()
 	if err != nil {
 		return err
 	}

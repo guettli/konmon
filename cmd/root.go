@@ -30,9 +30,14 @@ var rootCmd = &cobra.Command{
 	Use:     "konmon",
 	Version: buildVersion(),
 	Short:   "Kubernetes Condition Monitor",
-	Long: `konmon watches all resources of a Kubernetes cluster, keeps a local copy
-with history in SQLite, checks status.conditions with the rules of
-check-conditions, and sends alerts to Alertmanager.`,
+	Long: `konmon checks the resources of a Kubernetes cluster: status.conditions
+(the rules of check-conditions) and more checks, written in TypeScript or
+JavaScript, and your own ones.
+
+Ad hoc:      konmon check --context prod
+Monitoring:  konmon run, which keeps a local copy with history in SQLite
+             and sends alerts to Alertmanager; query it with 'konmon
+             findings' and 'konmon history'.`,
 	SilenceUsage: true,
 }
 

@@ -14,21 +14,27 @@ import (
 	"github.com/guettli/konmon/internal/store"
 )
 
-var findingsAt string
+var (
+	findingsAt     string
+	findingsFilter findingFilter
+)
 
 var findingsCmd = &cobra.Command{
 	Use:   "findings",
 	Short: "Show the findings which are open now, or were open at a given time",
 	Long: `Show the findings which are open now, or with --at, which were open at that
-time. The output has the same format as check-conditions, with the time the
+time. The output has the same format as 'konmon check', with the time the
 finding was first seen.
 
 Examples:
   konmon findings
-  konmon findings --at 2h
-  konmon findings --at 2026-10-24T03:00:00Z`,
+  konmon findings --at 2h -n my-app
+  konmon findings --at 2026-10-24T03:00:00Z --category health -o json`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := findingsFilter.validate(); err != nil {
+			return err
+		}
 		now := time.Now()
 		at, err := parseTime(findingsAt, now)
 		if err != nil {
@@ -37,7 +43,7 @@ Examples:
 		if at.IsZero() {
 			at = now
 		}
-		st, err := store.Open(cmd.Context(), dbPath)
+		st, err := store.OpenExisting(cmd.Context(), dbPath)
 		if err != nil {
 			return err
 		}
@@ -46,16 +52,39 @@ Examples:
 		if err != nil {
 			return err
 		}
-		printFindings(cmd.OutOrStdout(), rows, at)
-		return nil
+		return printFindings(cmd.OutOrStdout(), rows, at, &findingsFilter)
 	},
 }
 
-func printFindings(w io.Writer, rows []store.FindingRow, at time.Time) {
-	for i := range rows {
-		_, _ = fmt.Fprintf(w, "%s  [since %s]\n", rows[i].Finding.Line(at), formatTime(rows[i].FirstSeen))
+func printFindings(w io.Writer, rows []store.FindingRow, at time.Time, filter *findingFilter) error {
+	if filter.output == "json" {
+		result := findingsResult{At: at, Findings: []jsonFinding{}}
+		for i := range rows {
+			if filter.match(&rows[i].Finding) {
+				j := toJSONFinding(&rows[i].Finding)
+				j.FirstSeen = rows[i].FirstSeen
+				result.Findings = append(result.Findings, j)
+			}
+		}
+		sortJSONFindings(result.Findings)
+		return writeJSON(w, result)
 	}
-	_, _ = fmt.Fprintf(w, "%d findings open at %s\n", len(rows), formatTime(at))
+	var shown []shownFinding
+	for i := range rows {
+		f := &rows[i].Finding
+		if filter.match(f) {
+			shown = append(shown, shownFinding{f, fmt.Sprintf("%s  [since %s]", f.Line(at), formatTime(rows[i].FirstSeen))})
+		}
+	}
+	health, hygiene := printFindingLines(w, shown)
+	_, _ = fmt.Fprintf(w, "%s open at %s\n", filter.countText(health, hygiene), formatTime(at))
+	return nil
+}
+
+// findingsResult is the output of `findings -o json`.
+type findingsResult struct {
+	At       time.Time     `json:"at"`
+	Findings []jsonFinding `json:"findings"`
 }
 
 var (
@@ -83,7 +112,7 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("--since: %w", err)
 		}
-		st, err := store.Open(cmd.Context(), dbPath)
+		st, err := store.OpenExisting(cmd.Context(), dbPath)
 		if err != nil {
 			return err
 		}
@@ -172,6 +201,7 @@ var versionCmd = &cobra.Command{
 
 func init() {
 	findingsCmd.Flags().StringVar(&findingsAt, "at", "", "Point in time: a duration ago (2h) or an RFC3339 timestamp. Default: now.")
+	findingsFilter.register(findingsCmd.Flags())
 	historyCmd.Flags().StringVarP(&historyNamespace, "namespace", "n", "", "Namespace of the object. Default: all namespaces.")
 	historyCmd.Flags().StringVar(&historySince, "since", "", "Only show changes after this time: a duration ago (24h) or an RFC3339 timestamp. Default: everything.")
 	rootCmd.AddCommand(findingsCmd, historyCmd, versionCmd)

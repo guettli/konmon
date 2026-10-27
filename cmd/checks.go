@@ -41,8 +41,9 @@ func (c *checkFlags) register(f *pflag.FlagSet) {
 	f.DurationVar(&c.timeout, "check-timeout", time.Second, "Time limit for one call of a check function.")
 }
 
-// engine loads the core checks and the checks of --checks.
-func (c *checkFlags) engine(log *slog.Logger) (*checks.Engine, *checks.Files, error) {
+// engine loads the core checks and the checks of --checks. only (glob
+// patterns) and categories keep just these checks; empty keeps all.
+func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*checks.Engine, *checks.Files, error) {
 	if _, err := globMatcher(c.excludeNamespaces); err != nil {
 		return nil, nil, fmt.Errorf("--exclude-namespace: %w", err)
 	}
@@ -74,7 +75,7 @@ func (c *checkFlags) engine(log *slog.Logger) (*checks.Engine, *checks.Files, er
 		params[check][param] = value
 	}
 	e, err := checks.Load(checks.CoreFiles().Sources, user.Sources, checks.Options{
-		Disabled: c.disabled, Params: params, Timeout: c.timeout, Exclude: exclude, Log: log,
+		Disabled: c.disabled, Only: only, Categories: categories, Params: params, Timeout: c.timeout, Exclude: exclude, Log: log,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -106,7 +107,7 @@ var checksListCmd = &cobra.Command{
 	Short: "List the enabled checks",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		e, _, err := checksFlags.engine(slog.New(slog.DiscardHandler))
+		e, _, err := checksFlags.engine(slog.New(slog.DiscardHandler), nil, nil)
 		if err != nil {
 			return err
 		}
@@ -133,7 +134,7 @@ time and the expected findings. See the files in the checks directory of the
 konmon repository.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		e, user, err := checksFlags.engine(slog.New(slog.DiscardHandler))
+		e, user, err := checksFlags.engine(slog.New(slog.DiscardHandler), nil, nil)
 		if err != nil {
 			return err
 		}

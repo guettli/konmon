@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -102,13 +103,27 @@ type Store struct {
 
 // Open opens (and creates or migrates) the database at path.
 func Open(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, true)
+}
+
+// OpenExisting opens the database of a 'konmon run' at path, for reading.
+// Unlike Open it never creates one: a wrong path is an error, not an empty
+// history.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("no konmon database: %w", err)
+	}
+	return open(ctx, path, false)
+}
+
+func open(ctx context.Context, path string, create bool) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(ctx); err != nil {
+	if err := s.migrate(ctx, path, create); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -120,14 +135,16 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context, path string, create bool) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
+		return fmt.Errorf("%s: read schema version: %w", path, err)
 	}
 	switch {
 	case version == schemaVersion:
 		return nil
+	case version == 0 && !create:
+		return fmt.Errorf("%s is not a konmon database", path)
 	case version == 1:
 		// Version 1 was only used before the first release, with
 		// check-conditions findings.
