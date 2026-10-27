@@ -270,6 +270,8 @@ $ konmon triage --context prod --config konmon.yaml
 - Same flags as `konmon check` (`-n`, `--category`, check names), or `--from-db` to triage the findings of a running konmon.
 - It never changes the cluster: review the file (`git diff`) and deploy it.
 
+**Baseline.** On a cluster with many findings on day one, `konmon triage --baseline` writes one narrow ignore rule (this object) per open finding without asking, expiring after `--baseline-until` (default 90 days). The cluster is quiet now, only new problems are reported, and the expiry brings the old ones back for a real triage. Running it again adds only new findings (also the ones whose baseline rule expired: triage them interactively instead); failing checks and acknowledged findings are never baselined. A baseline rule is by object name, so a recreated object with the same name stays hidden until the rule expires. Narrow it like `check`, e.g. `--category hygiene`.
+
 In a cluster, put the file in a ConfigMap and restart konmon on changes (e.g. with [Reloader](https://github.com/stakater/Reloader)).
 
 ### Alerts

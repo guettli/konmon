@@ -145,3 +145,26 @@ func TestEditorSymlinkAndCommentsOnly(t *testing.T) {
 		t.Errorf("target:\n%s", data)
 	}
 }
+
+func TestEditorFlowStyleListBecomesBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	if err := os.WriteFile(path, []byte("ignore: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e, err := OpenEditor(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"a", "b"} {
+		if err := e.AddIgnore(&IgnoreRule{Check: c, Comment: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := e.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "ignore:\n  - check: a\n    comment: x\n  - check: b\n    comment: x\n"; string(data) != want {
+		t.Errorf("got:\n%s", data)
+	}
+}
