@@ -14,7 +14,11 @@ export default defineCheck({
   match: { resources: ["storageclasses.storage.k8s.io"] },
   check(sc, ctx) {
     if (!isDefault(sc)) return [];
-    const defaults = ctx.list("storageclasses.storage.k8s.io").filter(isDefault).map((s) => s.metadata.name).sort();
+    const defaults = ctx
+      .list("storageclasses.storage.k8s.io")
+      .filter(isDefault)
+      .map((s) => s.metadata.name)
+      .sort();
     if (defaults.length < 2) return [];
     return [{ message: `${defaults.length} StorageClasses are marked as default: ${defaults.join(", ")}` }];
   },

@@ -2,6 +2,7 @@ package checks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -149,11 +150,11 @@ func runProgram(vm *goja.Runtime, prg *goja.Program) (*goja.Object, error) {
 	}
 	mod := vm.Get(globalName)
 	if mod == nil || goja.IsUndefined(mod) {
-		return nil, fmt.Errorf("no module")
+		return nil, errors.New("no module")
 	}
 	def := mod.ToObject(vm).Get("default")
 	if def == nil || goja.IsUndefined(def) || goja.IsNull(def) {
-		return nil, fmt.Errorf("no default export: use export default defineCheck({...})")
+		return nil, errors.New("no default export: use export default defineCheck({...})")
 	}
 	// esbuild declares the global with var, which cannot be deleted.
 	if err := vm.Set(globalName, goja.Undefined()); err != nil {

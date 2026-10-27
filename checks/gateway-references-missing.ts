@@ -15,7 +15,11 @@ export default defineCheck({
     const ns = obj.metadata.namespace ?? "";
     if (ctx.resource.resource === "gateways") {
       const cls = obj.spec?.gatewayClassName;
-      if (cls && ctx.has("gatewayclasses.gateway.networking.k8s.io") && !ctx.get("gatewayclasses.gateway.networking.k8s.io", null, cls)) {
+      if (
+        cls &&
+        ctx.has("gatewayclasses.gateway.networking.k8s.io") &&
+        !ctx.get("gatewayclasses.gateway.networking.k8s.io", null, cls)
+      ) {
         return [{ message: `Gateway uses the GatewayClass ${cls} which does not exist` }];
       }
       return [];
@@ -27,7 +31,10 @@ export default defineCheck({
       if ((p.group ?? "gateway.networking.k8s.io") !== "gateway.networking.k8s.io" || kind !== "Gateway") continue;
       const pns = p.namespace ?? ns;
       if (!ctx.get("gateways.gateway.networking.k8s.io", pns, p.name)) {
-        findings.push({ key: `parent/${pns}/${p.name}`, message: `HTTPRoute uses the Gateway ${pns}/${p.name} which does not exist` });
+        findings.push({
+          key: `parent/${pns}/${p.name}`,
+          message: `HTTPRoute uses the Gateway ${pns}/${p.name} which does not exist`,
+        });
       }
     }
     const seen = new Set<string>();
@@ -42,7 +49,10 @@ export default defineCheck({
         if (!svc) {
           findings.push({ key, message: `HTTPRoute uses the Service ${bns}/${b.name} which does not exist` });
         } else if (b.port !== undefined && !(svc.spec?.ports ?? []).some((sp: any) => sp.port === b.port)) {
-          findings.push({ key, message: `HTTPRoute uses port ${b.port} of Service ${bns}/${b.name}, which the Service does not define` });
+          findings.push({
+            key,
+            message: `HTTPRoute uses port ${b.port} of Service ${bns}/${b.name}, which the Service does not define`,
+          });
         }
       }
     }

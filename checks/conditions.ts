@@ -143,7 +143,16 @@ const negativeByResource: Record<string, string[]> = {
   applicationsets: ["ErrorOccurred"],
 };
 
-const negativeSuffixes = ["Unavailable", "Pressure", "Dangling", "Unhealthy", "Paused", "Deleting", "Failed", "Degraded"];
+const negativeSuffixes = [
+  "Unavailable",
+  "Pressure",
+  "Dangling",
+  "Unhealthy",
+  "Paused",
+  "Deleting",
+  "Failed",
+  "Degraded",
+];
 
 // Healthy states which the rules above would report. Matched against
 // `resource Type=Status Reason "message"`. To add one, take a reported line
@@ -342,7 +351,8 @@ export default defineCheck({
     const skipReady =
       ready !== undefined &&
       rows.some(
-        (r) => r.type !== "Ready" && r.message === ready.message && r.reason === ready.reason && r.status === ready.status,
+        (r) =>
+          r.type !== "Ready" && r.message === ready.message && r.reason === ready.reason && r.status === ready.status,
       );
 
     // One finding per (status, reason, message): e.g. Failed and

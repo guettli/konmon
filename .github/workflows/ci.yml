@@ -1,38 +1,64 @@
 name: CI
 
+# Pull requests, and pushes to main (the release workflow runs after CI on
+# main). Other branches get CI through their pull request.
 on:
   pull_request:
   push:
-    branches: ["**"]
+    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  # A new push to a pull request cancels its older run; runs on main finish
+  # (the release depends on them).
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Test
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage.out ./...
 
-      - name: Build
-        run: CGO_ENABLED=0 go build -trimpath -o /dev/null .
+      - name: Coverage
+        run: |
+          {
+            echo '### Coverage'
+            echo '```'
+            go tool cover -func=coverage.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test core and example checks
         run: go run . checks test --checks examples
 
-  typecheck:
+      - name: Build all release targets
+        # The same targets as the release workflow, so a platform-specific
+        # build error shows up in the pull request.
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null .
+          done
+
+  typescript:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -44,12 +70,17 @@ jobs:
         working-directory: examples
         run: npx -y -p typescript@5.9.3 tsc -p .
 
+      - name: Formatting (prettier)
+        run: npx -y prettier@3.6.2 --check 'checks/*.ts' 'examples/*.ts'
+
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -59,7 +90,38 @@ jobs:
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
+      - name: govulncheck
+        # Fails on vulnerabilities which the code can reach, also in the Go
+        # standard library: update the toolchain line in go.mod.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
       - name: go mod tidy
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
+
+  image:
+    # The release builds the image from the release binaries; build it here
+    # too, so a broken Dockerfile shows up before the release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/konmon-linux-amd64 .
+
+      - name: Build image
+        run: docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -t konmon:ci .
+
+      - name: Smoke test
+        run: |
+          docker run --rm konmon:ci version
+          docker run --rm konmon:ci checks list > /dev/null

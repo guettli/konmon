@@ -18,6 +18,10 @@ export default defineCheck({
       .map((pdb) => pdb.metadata.name)
       .sort();
     if (names.length < 2) return [];
-    return [{ message: `Pod is selected by ${names.length} PodDisruptionBudgets (${names.join(", ")}): it cannot be evicted` }];
+    return [
+      {
+        message: `Pod is selected by ${names.length} PodDisruptionBudgets (${names.join(", ")}): it cannot be evicted`,
+      },
+    ];
   },
 });

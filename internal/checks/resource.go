@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -61,7 +62,7 @@ func parseResourceSet(patterns []string, allowAll bool) (resourceSet, error) {
 	for _, p := range patterns {
 		if p == "*" {
 			if !allowAll {
-				return rs, fmt.Errorf(`"*" is not allowed here`)
+				return rs, errors.New(`"*" is not allowed here`)
 			}
 			rs.all = true
 			continue

@@ -27,8 +27,8 @@ func TestAssess(t *testing.T) {
 		return store.HistoryRow{ObservedAt: now.Add(-at), Change: change, Condition: store.Condition{Type: typ, Status: status}}
 	}
 	flips := func(typ string) []store.HistoryRow {
-		var rows []store.HistoryRow
-		for i := 0; i < 8; i++ {
+		rows := make([]store.HistoryRow, 0, 8)
+		for i := range 8 {
 			st := "True"
 			if i%2 == 1 {
 				st = "False"
