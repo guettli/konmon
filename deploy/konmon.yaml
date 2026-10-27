@@ -1,0 +1,134 @@
+# konmon in a cluster: one replica with a volume for the history, read-only
+# access to everything, and a config file (ignore rules, condition
+# polarity). See docs/deploy.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: konmon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: konmon
+  namespace: konmon
+---
+# get/list/watch on everything. konmon never reads Secrets, but RBAC cannot
+# exclude them from "*": list resources explicitly if that is too much
+# (konmon skips types it may not list).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: konmon
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: konmon
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: konmon
+subjects:
+  - kind: ServiceAccount
+    name: konmon
+    namespace: konmon
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: konmon-data
+  namespace: konmon
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: konmon-config
+  namespace: konmon
+data:
+  # Write it with 'konmon triage --config konmon.yaml', see docs/config.md.
+  konmon.yaml: |
+    # No rules yet.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: konmon
+  namespace: konmon
+spec:
+  replicas: 1 # one writer per SQLite database
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: konmon
+  template:
+    metadata:
+      labels:
+        app: konmon
+    spec:
+      serviceAccountName: konmon
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: konmon
+          image: ghcr.io/guettli/konmon:latest # pin a release with images: in your kustomization, see docs/deploy.md
+          args:
+            - run
+            - --db=/data/konmon.db
+            - --config=/config/konmon.yaml
+            # - --cluster-name=prod
+            # - --alertmanager-url=http://alertmanager.monitoring.svc:9093
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 20m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+          # /healthz fails when evaluations stop; a restart lists everything
+          # again.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: konmon-data
+        - name: config
+          configMap:
+            name: konmon-config

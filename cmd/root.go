@@ -99,3 +99,6 @@ func splitResourceName(s string) (resource, group, name string, err error) {
 	resource, group, _ = strings.Cut(resource, ".")
 	return resource, group, name, nil
 }
+
+// Root returns the root command, for generating the CLI reference.
+func Root() *cobra.Command { return rootCmd }
