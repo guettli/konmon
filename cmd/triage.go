@@ -387,8 +387,8 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 	t.printf("      %s\n      e.g. %s: %s\n", where, findingObject(g.findings[0]), g.findings[0].Message)
 	if g.ev.verdict != "" {
 		hint := map[string]string{
-			verdictFalsePositive: "teach the polarity (t)",
-			verdictInformational: "teach it as informational (t, then b)",
+			verdictFalsePositive: "if that is right for this type, teach the polarity (t)",
+			verdictInformational: "if it is not about health, teach it as informational (t, then b)",
 			verdictReal:          "keep it (k)",
 		}[g.ev.verdict]
 		t.printf("      history: %s: %s. Suggestion: %s.\n", g.ev.verdict, g.ev.reason, hint)

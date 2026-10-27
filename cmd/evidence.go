@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 // Verdicts of the condition history about a group of findings, in the order
 // triage shows them.
 const (
-	verdictFalsePositive = "likely false positive"
-	verdictInformational = "likely informational"
+	verdictFalsePositive = "possibly normal for this type"
+	verdictInformational = "possibly informational"
 	verdictNone          = ""
 	verdictReal          = "likely real"
 )
@@ -100,65 +101,112 @@ func loadHistory(ctx context.Context, st *store.Store, resources map[string]bool
 	return h, err
 }
 
-// assess judges a group of conditions findings with the history: is the
-// "bad" status normal for this type (constant on all objects while they are
-// Ready, or flapping while Ready stays True), or did Ready go bad after it?
+// assess judges a group of conditions findings with the history. It is
+// deliberately cautious: a wrong "possibly normal" could make somebody
+// silence a real outage.
+//
+//   - possibly normal: every object of the group has the status for every
+//     type of the group since more than a day (the newest transition), all
+//     of them have Ready=True, and every object of the type in the cluster
+//     has this status; at least 2 objects, not for status Unknown.
+//   - possibly informational: the type changes often while Ready stays True
+//     on all objects of the group during the whole window.
+//   - likely real: Ready became unhealthy shortly after the type got the
+//     status, on any object of the group.
 func (h *historyData) assess(g *triageGroup, now time.Time) evidence {
 	if g.check != "conditions" || g.condition == "" || h == nil {
 		return evidence{}
 	}
-	typ := strings.Split(g.condition, "/")[0]
-	objects := h.objects[g.resource]
-	var withType, bad, badReady, changes, correlated int
-	var oldest time.Time
-	for _, o := range objects {
-		c, ok := o.conditions[typ]
-		if !ok {
-			continue
-		}
-		withType++
-		if c.Status != g.status {
-			continue
-		}
-		bad++
-		if ready, ok := o.conditions["Ready"]; typ == "Ready" || !ok || ready.Status == "True" {
-			badReady++
-		}
-		if t, err := time.Parse(time.RFC3339, c.LastTransitionTime); err == nil && (oldest.IsZero() || t.Before(oldest)) {
-			oldest = t
-		}
-		n, corr := h.changes(o.uid, typ, g.status)
-		changes += n
-		if corr {
-			correlated++
+	types := strings.Split(g.condition, "/")
+	inGroup := map[string]bool{}
+	for _, f := range g.findings {
+		inGroup[f.UID] = true
+	}
+	var objects []objectConditions // of the group, known to the store
+	for _, o := range h.objects[g.resource] {
+		if inGroup[o.uid] {
+			objects = append(objects, o)
 		}
 	}
-	if bad == 0 {
+	if len(objects) == 0 {
 		return evidence{}
 	}
-	what := fmt.Sprintf("%s=%s", typ, g.status)
-	switch {
-	case correlated > 0:
+	what := fmt.Sprintf("%s=%s", g.condition, g.status)
+
+	correlated, flapping := 0, 0
+	allReady, readyStable := true, true
+	var newest time.Time
+	for _, o := range objects {
+		ready, hasReady := o.conditions["Ready"]
+		if !hasReady || ready.Status != "True" || slices.Contains(types, "Ready") {
+			allReady = false
+		}
+		objFlaps := true
+		for _, typ := range types {
+			c, ok := o.conditions[typ]
+			if !ok || c.Status != g.status {
+				allReady = false // the store is older or newer than the findings
+				continue
+			}
+			t, err := time.Parse(time.RFC3339, c.LastTransitionTime)
+			if err != nil {
+				allReady = false
+			} else if t.After(newest) {
+				newest = t
+			}
+			n, corr, readyBad := h.changes(o.uid, typ, g.status)
+			if corr {
+				correlated++
+			}
+			if readyBad {
+				readyStable = false
+			}
+			if n < flappingChanges {
+				objFlaps = false
+			}
+		}
+		if objFlaps {
+			flapping++
+		}
+	}
+	if correlated > 0 {
 		return evidence{verdictReal, fmt.Sprintf("Ready became unhealthy within %s after %s on %d of %s",
-			roundDuration(correlatedWithin), what, correlated, plural(bad, "object"))}
-	case typ != "Ready" && bad == withType && badReady == bad && !oldest.IsZero() && now.Sub(oldest) >= constantFor:
-		return evidence{verdictFalsePositive, fmt.Sprintf("%s on %d/%d %s for %s, all of them Ready",
-			what, bad, withType, g.resource, roundDuration(now.Sub(oldest)))}
-	case typ != "Ready" && badReady == bad && changes >= flappingChanges*bad:
-		return evidence{verdictInformational, fmt.Sprintf("%s changed %d times on %s in %s while Ready stayed True",
-			typ, changes, plural(bad, "object"), roundDuration(now.Sub(h.since)))}
+			roundDuration(correlatedWithin), what, correlated, plural(len(objects), "object"))}
+	}
+	if g.status != "True" && g.status != "False" {
+		return evidence{}
+	}
+	sameEverywhere := true
+	for _, o := range h.objects[g.resource] {
+		for _, typ := range types {
+			if c, ok := o.conditions[typ]; ok {
+				if c.Status != g.status {
+					sameEverywhere = false
+				}
+			}
+		}
+	}
+	switch {
+	case allReady && sameEverywhere && len(objects) >= 2 && !newest.IsZero() && now.Sub(newest) >= constantFor:
+		return evidence{verdictFalsePositive, fmt.Sprintf("%s on all %s of %s for at least %s, all of them Ready=True",
+			what, plural(len(objects), "object"), g.resource, roundDuration(now.Sub(newest)))}
+	case allReady && readyStable && flapping == len(objects):
+		return evidence{verdictInformational, fmt.Sprintf("%s changed at least %d times on each of %s in %s while Ready stayed True",
+			g.condition, flappingChanges, plural(len(objects), "object"), roundDuration(now.Sub(h.since)))}
 	}
 	return evidence{}
 }
 
 // changes counts the status changes of a condition type of one object, and
-// reports whether Ready became unhealthy shortly after the type got status.
-func (h *historyData) changes(uid, typ, status string) (int, bool) {
-	var n int
+// reports whether Ready became unhealthy shortly after the type got status,
+// and whether Ready was unhealthy at any time of the window.
+func (h *historyData) changes(uid, typ, status string) (n int, correlated, readyBad bool) {
 	var last string
 	var badAt time.Time
-	correlated := false
 	for _, r := range h.history[uid] {
+		if r.Change == "removed" {
+			continue // carries the old status
+		}
 		switch r.Type {
 		case typ:
 			if last != "" && r.Status != last {
@@ -169,12 +217,16 @@ func (h *historyData) changes(uid, typ, status string) (int, bool) {
 				badAt = r.ObservedAt
 			}
 		case "Ready":
-			if typ != "Ready" && r.Status != "True" && !badAt.IsZero() && r.ObservedAt.Sub(badAt) <= correlatedWithin && !r.ObservedAt.Before(badAt) {
+			if r.Status == "True" {
+				continue
+			}
+			readyBad = true
+			if typ != "Ready" && !badAt.IsZero() && !r.ObservedAt.Before(badAt) && r.ObservedAt.Sub(badAt) <= correlatedWithin {
 				correlated = true
 			}
 		}
 	}
-	return n, correlated
+	return n, correlated, readyBad
 }
 
 // roundDuration is "3d", "5h" or "12m".
