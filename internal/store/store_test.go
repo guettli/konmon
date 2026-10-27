@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -272,4 +273,66 @@ func TestOpenRefusesDevelopmentSchema(t *testing.T) {
 	if _, err := Open(context.Background(), path); err == nil || !strings.Contains(err.Error(), "development version") {
 		t.Errorf("want an error for schema version 1, got %v", err)
 	}
+}
+
+func TestOpenExisting(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.db")
+	if _, err := OpenExisting(context.Background(), missing); err == nil {
+		t.Error("want an error for a missing file")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("OpenExisting created %s", missing)
+	}
+	empty := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExisting(context.Background(), empty); err == nil || !strings.Contains(err.Error(), "not a konmon database") {
+		t.Errorf("want an error for an empty file, got %v", err)
+	}
+	if info, _ := os.Stat(empty); info.Size() != 0 {
+		t.Errorf("OpenExisting changed %s", empty)
+	}
+	path := filepath.Join(dir, "konmon.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+
+	// A copy in a read-only directory, with the WAL not checkpointed.
+	s, err = Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := filepath.Join(dir, "ro")
+	if err := os.Mkdir(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ro, "konmon.db"), data, 0o400); err != nil { //nolint:gosec // test temp dir
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if err := os.Chmod(ro, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ro, 0o755) })
+	s, err = OpenExisting(context.Background(), filepath.Join(ro, "konmon.db"))
+	if err != nil {
+		t.Fatalf("read-only copy: %v", err)
+	}
+	if _, err := s.FindingsAt(context.Background(), time.Now()); err != nil {
+		t.Errorf("query read-only copy: %v", err)
+	}
+	_ = s.Close()
 }

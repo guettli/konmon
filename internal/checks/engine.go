@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -19,6 +20,13 @@ import (
 type Options struct {
 	// Disabled are glob patterns of check names to drop.
 	Disabled []string
+	// Only are glob patterns of the check names to keep; empty keeps all.
+	// A pattern which matches no check is an error (a typo would otherwise
+	// run no check at all).
+	Only []string
+	// Categories keeps only the checks of these categories; empty keeps
+	// all.
+	Categories []string
 	// Params overrides parameters: check name → param → value (JSON or a
 	// plain string).
 	Params map[string]map[string]string
@@ -89,16 +97,25 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 			return nil, fmt.Errorf("params for unknown check %q", name)
 		}
 	}
+	for _, p := range opts.Only {
+		if !slices.ContainsFunc(order, func(name string) bool { return globMatch(name, []string{p}) }) {
+			return nil, fmt.Errorf("no check matches %q", p)
+		}
+	}
 	e := &Engine{opts: opts}
 	for _, name := range order {
 		d := byName[name]
-		if globMatch(name, opts.Disabled) {
+		if globMatch(name, opts.Disabled) || (len(opts.Only) > 0 && !globMatch(name, opts.Only)) ||
+			(len(opts.Categories) > 0 && !slices.Contains(opts.Categories, d.Category)) {
 			continue
 		}
 		if err := d.setParams(opts.Params[name]); err != nil {
 			return nil, err
 		}
 		e.defs = append(e.defs, d)
+	}
+	if len(e.defs) == 0 && (len(opts.Only) > 0 || len(opts.Categories) > 0) {
+		return nil, fmt.Errorf("no check left to run: selected %v, categories %v, disabled %v", opts.Only, opts.Categories, opts.Disabled)
 	}
 	sort.Slice(e.defs, func(i, j int) bool { return e.defs[i].Name < e.defs[j].Name })
 	return e, nil
@@ -228,6 +245,11 @@ func (e *Engine) Evaluate(ctx context.Context, snap *Snapshot, hist History, now
 	var err error
 feed:
 	for _, t := range tasks {
+		// select picks a random ready case: without this check a cancelled
+		// evaluation could still run (and return) everything.
+		if err = ctx.Err(); err != nil {
+			break
+		}
 		select {
 		case ch <- t:
 		case <-ctx.Done():

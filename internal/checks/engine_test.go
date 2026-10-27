@@ -286,6 +286,34 @@ func TestLoadErrorsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadOnly(t *testing.T) {
+	core := CoreFiles()
+	e, err := Load(core.Sources, nil, Options{Only: []string{"pv-*", "conditions"}, Disabled: []string{"pv-released"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(e.Checks()))
+	for _, d := range e.Checks() {
+		names = append(names, d.Name)
+	}
+	if got := strings.Join(names, ","); got != "conditions,pv-failed" {
+		t.Errorf("checks: %s", got)
+	}
+	e, err = Load(core.Sources, nil, Options{Only: []string{"pv-*"}, Categories: []string{CategoryHygiene}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Checks()) != 1 || e.Checks()[0].Name != "pv-released" {
+		t.Errorf("want only pv-released, got %d checks", len(e.Checks()))
+	}
+	if _, err := Load(core.Sources, nil, Options{Only: []string{"pv-released"}, Categories: []string{CategoryHealth}}); err == nil {
+		t.Error("want an error when no check is left")
+	}
+	if _, err := Load(core.Sources, nil, Options{Only: []string{"conditoins"}}); err == nil || !strings.Contains(err.Error(), "conditoins") {
+		t.Errorf("want an error for a pattern which matches no check, got %v", err)
+	}
+}
+
 func TestWatchAndStore(t *testing.T) {
 	core := CoreFiles()
 	e, err := Load(core.Sources, []Source{{Path: "x.ts", Code: `export default { name: "x", match: { resources: ["ingresses.networking.k8s.io"] }, reads: ["endpointslices.discovery.k8s.io"], check() {} };`}}, Options{})

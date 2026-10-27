@@ -7,8 +7,7 @@ import (
 	"os/signal"
 	"path"
 	"regexp"
-	"sort"
-	"strings"
+	"slices"
 	"syscall"
 	"time"
 
@@ -22,8 +21,9 @@ import (
 )
 
 var checkOpts struct {
-	kubeContext   string
+	kube          kubeFlags
 	checks        checkFlags
+	filter        findingFilter
 	useDB         bool
 	historyWindow time.Duration
 }
@@ -41,21 +41,31 @@ const (
 )
 
 var checkCmd = &cobra.Command{
-	Use:   "check",
+	Use:   "check [CHECK...]",
 	Short: "Run all checks once and print the findings",
 	Long: `List all objects of the cluster once, run the checks and print the
-findings, like check-conditions does. Nothing is stored.
+findings, like check-conditions does. Nothing is stored. Health findings
+come first, hygiene findings (which never alert) below them.
 
-Exit codes: 0 no findings; 1 health findings; 2 no findings, but some
-resource types or API groups could not be listed (other than forbidden ones,
-which are printed). Other errors also exit with 1.
+With CHECK arguments (names, glob patterns allowed) only these checks run,
+and only the resource types they need are listed.
+
+Exit codes: 0 no health findings; 1 health findings; 2 no health findings,
+but some resource types or API groups could not be listed (other than
+forbidden ones, which are printed). Other errors also exit with 1.
 
 Checks which use condition history need --use-db: the history is read from
-the database of a running 'konmon run' (--db).`,
-	Args:          cobra.NoArgs,
+the database of a running 'konmon run' (--db).
+
+Examples:
+  konmon check --context prod
+  konmon check -n my-app --category health
+  konmon check conditions 'pod-*'
+  konmon check -o json | jq '.findings[] | select(.severity == "critical")'`,
+	Args:          cobra.ArbitraryArgs,
 	SilenceErrors: true,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		err := check(cmd.Context(), cmd)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		err := check(cmd.Context(), cmd, args)
 		var exit exitError
 		if err != nil && !errors.As(err, &exit) {
 			cmd.PrintErrln("Error:", err)
@@ -66,20 +76,24 @@ the database of a running 'konmon run' (--db).`,
 
 func init() {
 	f := checkCmd.Flags()
-	f.StringVar(&checkOpts.kubeContext, "context", "", "Kubeconfig context to use. Default: current context.")
+	checkOpts.kube.register(f)
 	checkOpts.checks.register(f)
+	checkOpts.filter.register(f)
 	f.BoolVar(&checkOpts.useDB, "use-db", false, "Read condition history for checks from --db.")
 	f.DurationVar(&checkOpts.historyWindow, "history-window", 24*time.Hour, "How much condition history checks can see.")
 	rootCmd.AddCommand(checkCmd)
 }
 
-func check(ctx context.Context, cmd *cobra.Command) error {
+func check(ctx context.Context, cmd *cobra.Command, only []string) error {
+	if err := checkOpts.filter.validate(); err != nil {
+		return err
+	}
 	log, err := newLogger()
 	if err != nil {
 		return err
 	}
 	klog.SetSlogLogger(log)
-	engine, _, err := checkOpts.checks.engine(log)
+	engine, _, err := checkOpts.checks.engine(log, only, checkOpts.filter.categories)
 	if err != nil {
 		return err
 	}
@@ -87,7 +101,7 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	_, dyn, disc, err := clients(checkOpts.kubeContext)
+	_, dyn, disc, err := checkOpts.kube.clients()
 	if err != nil {
 		return err
 	}
@@ -115,7 +129,7 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 		if !checkOpts.useDB {
 			log.Warn("some checks use condition history; without --use-db they fail")
 		} else {
-			st, err := store.Open(ctx, dbPath)
+			st, err := store.OpenExisting(ctx, dbPath)
 			if err != nil {
 				return err
 			}
@@ -132,36 +146,55 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	var lines []string
-	health := 0
+	var shown []shownFinding
 	for i := range res.Findings {
 		f := &res.Findings[i]
-		if matchAny(ignore, f.Subject()) {
+		if matchAny(ignore, f.Subject()) || !checkOpts.filter.match(f) {
 			continue
 		}
-		if f.Category == checks.CategoryHealth {
-			health++
-		}
-		lines = append(lines, f.Line(now))
+		shown = append(shown, shownFinding{f, f.Line(now)})
 	}
-	sort.Strings(lines)
-	out := cmd.OutOrStdout()
-	for _, l := range lines {
-		_, _ = fmt.Fprintln(out, l)
+	notAllowed := make([]string, 0, len(forbidden))
+	for _, gvr := range forbidden {
+		notAllowed = append(notAllowed, checks.FormatResource(gvr.GroupResource()))
 	}
-	if len(forbidden) > 0 {
-		names := make([]string, 0, len(forbidden))
-		for _, gvr := range forbidden {
-			names = append(names, checks.FormatResource(gvr.GroupResource()))
-		}
-		sort.Strings(names)
-		_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", strings.Join(names, ", "))
-	}
+	notChecked := make([]string, 0, len(listed.Failed))
 	for _, err := range listed.Failed {
-		_, _ = fmt.Fprintf(out, "Not checked: %v\n", err)
+		notChecked = append(notChecked, err.Error())
 	}
-	_, _ = fmt.Fprintf(out, "Checked %d objects of %d types with %d checks in %s: %d findings.\n",
-		res.Objects, len(available), len(engine.Checks()), time.Since(now).Round(time.Millisecond), len(lines))
+	took := time.Since(now)
+
+	health := 0
+	out := cmd.OutOrStdout()
+	if checkOpts.filter.output == "json" {
+		result := checkResult{
+			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked,
+			Objects: res.Objects, Types: len(available), Checks: len(engine.Checks()), DurationMS: took.Milliseconds(),
+		}
+		for _, s := range shown {
+			result.Findings = append(result.Findings, toJSONFinding(s.finding))
+			if s.finding.Category == checks.CategoryHealth {
+				health++
+			}
+		}
+		sortJSONFindings(result.Findings)
+		slices.Sort(result.NotAllowed)
+		if err := writeJSON(out, result); err != nil {
+			return err
+		}
+	} else {
+		var hygiene int
+		health, hygiene = printFindingLines(out, shown)
+		if len(notAllowed) > 0 {
+			_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", joinSorted(notAllowed))
+		}
+		for _, s := range notChecked {
+			_, _ = fmt.Fprintf(out, "Not checked: %s\n", s)
+		}
+		_, _ = fmt.Fprintf(out, "Checked %s of %s with %s in %s: %s.\n",
+			plural(res.Objects, "object"), plural(len(available), "type"), plural(len(engine.Checks()), "check"), took.Round(time.Millisecond),
+			checkOpts.filter.countText(health, hygiene))
+	}
 	if health > 0 {
 		return errFindings
 	}
@@ -170,6 +203,20 @@ func check(ctx context.Context, cmd *cobra.Command) error {
 		return errIncomplete
 	}
 	return nil
+}
+
+// checkResult is the output of `check -o json`.
+type checkResult struct {
+	Findings []jsonFinding `json:"findings"`
+	// NotAllowed are the resource types RBAC does not allow to list.
+	NotAllowed []string `json:"notAllowed"`
+	// NotChecked are errors of resource types or API groups which could
+	// not be listed.
+	NotChecked []string `json:"notChecked"`
+	Objects    int      `json:"objects"`
+	Types      int      `json:"types"`
+	Checks     int      `json:"checks"`
+	DurationMS int64    `json:"durationMs"`
 }
 
 func matchGlob(s string, patterns []string) bool {
