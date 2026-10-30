@@ -308,7 +308,7 @@ func writeMetrics(w io.Writer, ev evaluations, started time.Time, evalInterval t
 		name, typ, help, labels string
 		value                   float64
 	}{
-		{"konmon_build_info", "gauge", "Always 1; the version as label.", fmt.Sprintf("{version=%q}", buildVersion()), 1},
+		{"konmon_build_info", "gauge", "Always 1; the version as label.", `{version="` + labelValue(buildVersion()) + `"}`, 1},
 		{"konmon_start_time_seconds", "gauge", "Start time of the process, Unix seconds.", "", float64(started.Unix())},
 		{"konmon_evaluation_interval_seconds", "gauge", "Time between two evaluations (--eval-interval).", "", evalInterval.Seconds()},
 		{"konmon_evaluations_total", "counter", "Successful evaluations since the start.", "", float64(ev.Evaluations())},
@@ -319,6 +319,9 @@ func writeMetrics(w io.Writer, ev evaluations, started time.Time, evalInterval t
 			m.name, m.help, m.name, m.typ, m.name, m.labels, strconv.FormatFloat(m.value, 'f', -1, 64))
 	}
 }
+
+// labelValue escapes a Prometheus label value: only \\, " and newline.
+var labelValue = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace
 
 // evaluatedRecently: an evaluation finished, and the last one is less than
 // three intervals (plus a minute for a slow one) ago.

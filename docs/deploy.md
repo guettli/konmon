@@ -103,15 +103,18 @@ A broken konmon cannot report that it is broken. `/metrics` (on `--listen`, Prom
 | `konmon_start_time_seconds` | start of the process |
 | `konmon_build_info{version}` | always 1 |
 
-Alert when konmon evaluates less than half as often as it should. The rate over 15 minutes also catches a konmon which evaluates once after each restart and then stalls, which a check of the last timestamp misses:
+Alert when konmon makes less than a third of the evaluations it should. The rate over 15 minutes also catches a konmon which evaluates once after each liveness restart and then stalls (about 0.1), which a check of the last timestamp misses. Sum per cluster: each pod is its own series, and after a rollout the old pod's series covers the start of the window. Expect it to fire about 20 minutes after konmon stopped evaluating normally (the old rate has to leave the window, then `for`). An evaluation which takes longer than the interval makes the next tick wait, so a konmon which needs 2 × `--eval-interval` per evaluation reads 0.5 and does not fire:
 
 ```yaml
 - alert: KonmonNotEvaluating
-  expr: rate(konmon_evaluations_total[15m]) * konmon_evaluation_interval_seconds < 0.5
+  expr: >-
+    sum by (cluster) (rate(konmon_evaluations_total[15m]))
+    * on (cluster) max by (cluster) (konmon_evaluation_interval_seconds)
+    < 0.3
   for: 10m
 ```
 
-And alert when the metrics are missing although the scraper works (konmon is not running, or cannot be scraped), for example with `absent(konmon_build_info)`.
+Also alert when konmon is not scraped at all: not running, crash-looping before it serves, or not found by the scraper, for example `absent(up{job="konmon"}) or up{job="konmon"} == 0`. deploy/ has no Service or scrape annotation; point your scraper at the Pod's `http` port (8080), path `/metrics`.
 
 ## Memory and disk
 

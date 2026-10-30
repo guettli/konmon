@@ -70,3 +70,9 @@ func TestMetrics(t *testing.T) {
 		t.Errorf("before the first evaluation the timestamp should be 0:\n%s", rec.Body)
 	}
 }
+
+func TestLabelValue(t *testing.T) {
+	if got, want := labelValue("a\\b\"c\nd"), `a\\b\"c\nd`; got != want {
+		t.Errorf("labelValue = %s, want %s", got, want)
+	}
+}
