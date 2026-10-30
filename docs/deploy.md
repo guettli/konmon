@@ -71,7 +71,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--alertmanager-url` | none | repeatable; without it konmon only records |
 | `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
 | `--cluster-name` | none | `cluster` label on all alerts |
-| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness) |
+| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness), [`/metrics`](#monitoring-konmon) |
 
 Parameters of the checks: see [Checks](checks.md#core-checks).
 
@@ -90,6 +90,28 @@ Parameters of the checks: see [Checks](checks.md#core-checks).
 | `key` | the finding key, if there is no condition or container |
 
 Annotations: `summary` (the output line), `since`, and the finding's `details` (for `conditions`: `status`, `reason`, `message`).
+
+## Monitoring konmon
+
+A broken konmon cannot report that it is broken. `/metrics` (on `--listen`, Prometheus text format) lets something else do it:
+
+| Metric | |
+|---|---|
+| `konmon_evaluations_total` | counter of successful evaluations |
+| `konmon_last_evaluation_timestamp_seconds` | time of the last one; 0 before the first |
+| `konmon_evaluation_interval_seconds` | `--eval-interval` |
+| `konmon_start_time_seconds` | start of the process |
+| `konmon_build_info{version}` | always 1 |
+
+Alert when konmon evaluates less than half as often as it should. The rate over 15 minutes also catches a konmon which evaluates once after each restart and then stalls, which a check of the last timestamp misses:
+
+```yaml
+- alert: KonmonNotEvaluating
+  expr: rate(konmon_evaluations_total[15m]) * konmon_evaluation_interval_seconds < 0.5
+  for: 10m
+```
+
+And alert when the metrics are missing although the scraper works (konmon is not running, or cannot be scraped), for example with `absent(konmon_build_info)`.
 
 ## Memory and disk
 
