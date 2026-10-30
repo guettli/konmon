@@ -7,7 +7,9 @@ To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
 - a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
 - a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
 - a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
-- a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and a liveness probe on `/healthz` (it fails when evaluations stop).
+- a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and these probes:
+  - startup and readiness on `/readyz`: OK only once konmon has evaluated, and while evaluations run. So a rollout is complete only when the new konmon really monitors, and a release which never evaluates leaves the Deployment unavailable (and fails a Flux or Argo CD health check) instead of looking healthy. The startup probe allows 10 minutes for discovery, the initial list of all resource types and the first evaluation, which runs as soon as the list is complete (`failureThreshold: 60`, `periodSeconds: 10`); raise it for a very big cluster.
+  - liveness on `/healthz`: fails when evaluations stop, so a restart lists everything again. Without a startup probe it is OK for the first 10 minutes before the first evaluation.
 
 For real use, pin a [release](https://github.com/guettli/konmon/releases) (the manifests and the image) and set the cluster name and Alertmanager in your own `kustomization.yaml`:
 
@@ -69,7 +71,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--alertmanager-url` | none | repeatable; without it konmon only records |
 | `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
 | `--cluster-name` | none | `cluster` label on all alerts |
-| `--listen` | `:8080` | `/healthz` |
+| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness) |
 
 Parameters of the checks: see [Checks](checks.md#core-checks).
 
