@@ -79,6 +79,10 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 	if _, found := synced.UIDs["uid-a"]; !found || len(synced.UIDs) != 1 {
 		t.Errorf("Synced UIDs = %v", synced.UIDs)
 	}
+	// Synced also waits for the end of the discovery run.
+	for deadline := time.Now().Add(5 * time.Second); !w.Synced() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if !w.Synced() || len(w.Snapshot()) != 1 {
 		t.Errorf("watcher should be synced with one object, got %d", len(w.Snapshot()))
 	}
@@ -94,5 +98,20 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 	}
 	if del, ok := next(t, events).(Delete); !ok || del.UID != "uid-a" {
 		t.Fatalf("want Delete of uid-a, got %#v", del)
+	}
+}
+
+func TestSyncedWaitsForTheEndOfDiscovery(t *testing.T) {
+	synced := make(chan struct{})
+	close(synced)
+	w := &Watcher{informers: map[schema.GroupResource]*running{
+		jobsGVR.GroupResource(): {gvr: jobsGVR, synced: synced},
+	}}
+	if w.Synced() {
+		t.Error("Synced while discovery has not gone through all resource types")
+	}
+	w.discovered = true
+	if !w.Synced() {
+		t.Error("not Synced after discovery with all informers synced")
 	}
 }

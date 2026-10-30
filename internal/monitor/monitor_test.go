@@ -406,3 +406,21 @@ func TestIgnoreRuleStartsAndStopsMatching(t *testing.T) {
 		t.Errorf("want firing again after For, got %d", len(n.firing))
 	}
 }
+
+func TestRunEvaluatesAsSoonAsSynced(t *testing.T) {
+	src := &fakeSource{synced: true}
+	m, _ := newTestMonitor(t, src, nil) // EvalInterval 30s
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx, make(chan any)) }()
+	for deadline := time.Now().Add(5 * time.Second); m.LastEvaluation().IsZero() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEvaluation().IsZero() {
+		t.Error("the first evaluation should run right after the sync, not one EvalInterval later")
+	}
+}

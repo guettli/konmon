@@ -61,6 +61,9 @@ type Watcher struct {
 	mu        sync.Mutex
 	informers map[schema.GroupResource]*running
 	forbidden map[schema.GroupResource]struct{}
+	// discovered: a refresh went through all resource types. Before that,
+	// informers holds only the types started so far.
+	discovered bool
 }
 
 type running struct {
@@ -76,13 +79,20 @@ func (w *Watcher) Run(ctx context.Context, refresh time.Duration) error {
 	w.mu.Lock()
 	w.informers = map[schema.GroupResource]*running{}
 	w.forbidden = map[schema.GroupResource]struct{}{}
+	w.discovered = false
 	w.mu.Unlock()
 
 	ticker := time.NewTicker(refresh)
 	defer ticker.Stop()
 	for {
-		if err := w.refresh(ctx); err != nil && ctx.Err() == nil {
-			w.Log.Error("discovery failed", "err", err)
+		if err := w.refresh(ctx); err != nil {
+			if ctx.Err() == nil {
+				w.Log.Error("discovery failed", "err", err)
+			}
+		} else {
+			w.mu.Lock()
+			w.discovered = true
+			w.mu.Unlock()
 		}
 		select {
 		case <-ctx.Done():
@@ -97,12 +107,12 @@ func (w *Watcher) Run(ctx context.Context, refresh time.Duration) error {
 	}
 }
 
-// Synced reports whether discovery ran and all informers have finished their
-// initial list.
+// Synced reports whether discovery went through all resource types and all
+// informers have finished their initial list.
 func (w *Watcher) Synced() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.informers) == 0 {
+	if !w.discovered || len(w.informers) == 0 {
 		return false
 	}
 	for _, r := range w.informers {

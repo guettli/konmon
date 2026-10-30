@@ -107,9 +107,10 @@ spec:
             capabilities:
               drop: ["ALL"]
           # /readyz is OK once konmon has evaluated, so the Pod is Ready (and a
-          # rollout complete) only when it really monitors. The initial sync
-          # may take up to 10 minutes (60 × 10s) on a big cluster; liveness and
-          # readiness start after it.
+          # rollout complete) only when it really monitors. Discovery, the
+          # initial list of all resource types and the first evaluation may
+          # take up to 10 minutes (60 × 10s); liveness and readiness start
+          # after that.
           startupProbe:
             httpGet:
               path: /readyz

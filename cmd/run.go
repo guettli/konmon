@@ -148,6 +148,9 @@ func run(ctx context.Context) error {
 		return err
 	}
 	ignore.warnExpired(log, time.Now())
+	if runOpts.evalInterval <= 0 {
+		return errors.New("--eval-interval must be positive")
+	}
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)

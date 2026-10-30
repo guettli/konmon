@@ -100,6 +100,10 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
 
+	// first: no evaluation of a synced source yet. The first one runs as
+	// soon as the source has synced, not one EvalInterval after the start:
+	// konmon is not ready (/readyz) before it.
+	first := true
 	var batch []any
 	doFlush := func() error {
 		if len(batch) == 0 {
@@ -131,9 +135,19 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if err := doFlush(); err != nil {
 				return err
 			}
+			if first && m.source.Synced() {
+				first = false
+				eval.Reset(m.cfg.EvalInterval)
+				if err := m.Evaluate(ctx, time.Now()); err != nil {
+					m.cfg.Log.Error("evaluation failed", "err", err)
+				}
+			}
 		case <-eval.C:
 			if err := doFlush(); err != nil {
 				return err
+			}
+			if m.source.Synced() {
+				first = false
 			}
 			if err := m.Evaluate(ctx, time.Now()); err != nil {
 				m.cfg.Log.Error("evaluation failed", "err", err)
