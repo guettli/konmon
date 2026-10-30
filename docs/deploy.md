@@ -71,7 +71,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--alertmanager-url` | none | repeatable; without it konmon only records |
 | `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
 | `--cluster-name` | none | `cluster` label on all alerts |
-| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness) |
+| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness), [`/metrics`](#monitoring-konmon) |
 
 Parameters of the checks: see [Checks](checks.md#core-checks).
 
@@ -90,6 +90,31 @@ Parameters of the checks: see [Checks](checks.md#core-checks).
 | `key` | the finding key, if there is no condition or container |
 
 Annotations: `summary` (the output line), `since`, and the finding's `details` (for `conditions`: `status`, `reason`, `message`).
+
+## Monitoring konmon
+
+A broken konmon cannot report that it is broken. `/metrics` (on `--listen`, Prometheus text format) lets something else do it:
+
+| Metric | |
+|---|---|
+| `konmon_evaluations_total` | counter of successful evaluations |
+| `konmon_last_evaluation_timestamp_seconds` | time of the last one; 0 before the first |
+| `konmon_evaluation_interval_seconds` | `--eval-interval` |
+| `konmon_start_time_seconds` | start of the process |
+| `konmon_build_info{version}` | always 1 |
+
+Alert when konmon makes less than a third of the evaluations it should. The rate over 15 minutes also catches a konmon which evaluates once after each liveness restart and then stalls (about 0.1), which a check of the last timestamp misses. Sum per cluster: each pod is its own series, and after a rollout the old pod's series covers the start of the window. Expect it to fire about 20 minutes after konmon stopped evaluating normally (the old rate has to leave the window, then `for`). An evaluation which takes longer than the interval makes the next tick wait, so a konmon which needs 2 × `--eval-interval` per evaluation reads 0.5 and does not fire:
+
+```yaml
+- alert: KonmonNotEvaluating
+  expr: >-
+    sum by (cluster) (rate(konmon_evaluations_total[15m]))
+    * on (cluster) max by (cluster) (konmon_evaluation_interval_seconds)
+    < 0.3
+  for: 10m
+```
+
+Also alert when konmon is not scraped at all: not running, crash-looping before it serves, or not found by the scraper, for example `absent(up{job="konmon"}) or up{job="konmon"} == 0`. deploy/ has no Service or scrape annotation; point your scraper at the Pod's `http` port (8080), path `/metrics`.
 
 ## Memory and disk
 

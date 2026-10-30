@@ -68,13 +68,17 @@ type Monitor struct {
 	source   Source
 	notifier Notifier
 
-	lastEval atomic.Int64 // unix ms of the last successful evaluation
+	lastEval    atomic.Int64  // unix ms of the last successful evaluation
+	evaluations atomic.Uint64 // successful evaluations
 }
 
 // New creates a Monitor. notifier may be nil.
 func New(cfg Config, s *store.Store, source Source, notifier Notifier) *Monitor {
 	return &Monitor{cfg: cfg, store: s, source: source, notifier: notifier}
 }
+
+// Evaluations returns the number of successful evaluations.
+func (m *Monitor) Evaluations() uint64 { return m.evaluations.Load() }
 
 // LastEvaluation returns the time of the last successful evaluation.
 func (m *Monitor) LastEvaluation() time.Time {
@@ -408,6 +412,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 			}
 		}
 	}
+	m.evaluations.Add(1)
 	if m.lastEval.Swap(now.UnixMilli()) == 0 {
 		m.cfg.Log.Info("first evaluation finished", "open", len(open))
 	}

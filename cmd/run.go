@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os/signal"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -72,7 +74,7 @@ func init() {
 	f.DurationVar(&runOpts.evalInterval, "eval-interval", 30*time.Second, "Time between two evaluations of all objects.")
 	f.DurationVar(&runOpts.discoveryInterval, "discovery-interval", 5*time.Minute, "Time between two discoveries of resource types (new CRDs).")
 	f.DurationVar(&runOpts.retention, "retention", 30*24*time.Hour, "How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything.")
-	f.StringVar(&runOpts.listen, "listen", ":8080", "Address for /healthz (liveness) and /readyz (readiness, startup). Empty disables it.")
+	f.StringVar(&runOpts.listen, "listen", ":8080", "Address for /healthz (liveness), /readyz (readiness, startup) and /metrics. Empty disables it.")
 	f.StringSliceVar(&runOpts.alertmanagerURLs, "alertmanager-url", nil, "Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.")
 	f.BoolVar(&runOpts.alertmanagerWatchdog, "alertmanager-watchdog", false, "Send an always-firing KonmonWatchdog alert, for a dead man's switch.")
 	f.DurationVar(&runOpts.resendResolved, "resend-resolved", 15*time.Minute, "How long resolved alerts are re-sent to Alertmanager.")
@@ -234,7 +236,7 @@ func run(ctx context.Context) error {
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })
 	g.Go(func() error { return mon.Run(ctx, events) })
 	if runOpts.listen != "" {
-		srv := healthServer(runOpts.listen, mon.LastEvaluation, time.Now(), runOpts.evalInterval)
+		srv := healthServer(runOpts.listen, mon, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("listen %s: %w", runOpts.listen, err)
@@ -266,8 +268,15 @@ const startupGrace = 10 * time.Minute
 //   - /healthz: like /readyz, but OK for startupGrace before the first
 //     evaluation. For the liveness probe; the grace keeps a Deployment
 //     without a startup probe from killing a slow initial sync.
-func healthServer(addr string, lastEvaluation func() time.Time, started time.Time, evalInterval time.Duration) *http.Server {
+//   - /metrics: Prometheus metrics, to alert from outside when konmon does
+//     not evaluate (konmon cannot report that about itself).
+func healthServer(addr string, ev evaluations, started time.Time, evalInterval time.Duration) *http.Server {
+	lastEvaluation := ev.LastEvaluation
 	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		writeMetrics(w, ev, started, evalInterval)
+	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		last := lastEvaluation()
 		probeResponse(w, evaluatedRecently(last, time.Now(), evalInterval), last)
@@ -281,6 +290,38 @@ func healthServer(addr string, lastEvaluation func() time.Time, started time.Tim
 	})
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 }
+
+// evaluations is what the health server needs of the monitor.
+type evaluations interface {
+	LastEvaluation() time.Time
+	Evaluations() uint64
+}
+
+// writeMetrics writes the metrics in the Prometheus text format. A handful
+// of gauges and one counter: no need for a client library.
+func writeMetrics(w io.Writer, ev evaluations, started time.Time, evalInterval time.Duration) {
+	var lastSeconds float64
+	if last := ev.LastEvaluation(); !last.IsZero() {
+		lastSeconds = float64(last.UnixMilli()) / 1000
+	}
+	metrics := []struct {
+		name, typ, help, labels string
+		value                   float64
+	}{
+		{"konmon_build_info", "gauge", "Always 1; the version as label.", `{version="` + labelValue(buildVersion()) + `"}`, 1},
+		{"konmon_start_time_seconds", "gauge", "Start time of the process, Unix seconds.", "", float64(started.Unix())},
+		{"konmon_evaluation_interval_seconds", "gauge", "Time between two evaluations (--eval-interval).", "", evalInterval.Seconds()},
+		{"konmon_evaluations_total", "counter", "Successful evaluations since the start.", "", float64(ev.Evaluations())},
+		{"konmon_last_evaluation_timestamp_seconds", "gauge", "Time of the last successful evaluation, Unix seconds; 0 before the first.", "", lastSeconds},
+	}
+	for _, m := range metrics {
+		_, _ = fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s%s %s\n",
+			m.name, m.help, m.name, m.typ, m.name, m.labels, strconv.FormatFloat(m.value, 'f', -1, 64))
+	}
+}
+
+// labelValue escapes a Prometheus label value: only \\, " and newline.
+var labelValue = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace
 
 // evaluatedRecently: an evaluation finished, and the last one is less than
 // three intervals (plus a minute for a slow one) ago.

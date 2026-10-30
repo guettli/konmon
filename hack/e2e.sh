@@ -34,6 +34,15 @@ YAML
 kubectl --context "$ctx" kustomize "$overlay" | kubectl --context "$ctx" apply -f -
 kubectl --context "$ctx" -n konmon rollout status deploy/konmon --timeout=180s
 
+echo "--- /metrics: konmon has evaluated (it is Ready, so it must have)"
+pod=$(kubectl --context "$ctx" -n konmon get pod -l app=konmon -o jsonpath='{.items[0].metadata.name}')
+metrics=$(kubectl --context "$ctx" get --raw "/api/v1/namespaces/konmon/pods/$pod:8080/proxy/metrics")
+if ! grep -Eq '^konmon_evaluations_total [1-9]' <<<"$metrics"; then
+  echo "no evaluation in /metrics:"
+  echo "$metrics"
+  exit 1
+fi
+
 echo "--- a healthy cluster has no health findings"
 kubectl --context "$ctx" delete namespace e2e --ignore-not-found --wait # an earlier run
 kubectl --context "$ctx" wait --for=condition=Ready pod --all --all-namespaces --timeout=180s

@@ -423,4 +423,7 @@ func TestRunEvaluatesAsSoonAsSynced(t *testing.T) {
 	if m.LastEvaluation().IsZero() {
 		t.Error("the first evaluation should run right after the sync, not one EvalInterval later")
 	}
+	if m.Evaluations() != 1 {
+		t.Errorf("Evaluations() = %d, want 1", m.Evaluations())
+	}
 }
