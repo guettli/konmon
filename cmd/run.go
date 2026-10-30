@@ -72,7 +72,7 @@ func init() {
 	f.DurationVar(&runOpts.evalInterval, "eval-interval", 30*time.Second, "Time between two evaluations of all objects.")
 	f.DurationVar(&runOpts.discoveryInterval, "discovery-interval", 5*time.Minute, "Time between two discoveries of resource types (new CRDs).")
 	f.DurationVar(&runOpts.retention, "retention", 30*24*time.Hour, "How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything.")
-	f.StringVar(&runOpts.listen, "listen", ":8080", "Address for /healthz. Empty disables it.")
+	f.StringVar(&runOpts.listen, "listen", ":8080", "Address for /healthz (liveness) and /readyz (readiness, startup). Empty disables it.")
 	f.StringSliceVar(&runOpts.alertmanagerURLs, "alertmanager-url", nil, "Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.")
 	f.BoolVar(&runOpts.alertmanagerWatchdog, "alertmanager-watchdog", false, "Send an always-firing KonmonWatchdog alert, for a dead man's switch.")
 	f.DurationVar(&runOpts.resendResolved, "resend-resolved", 15*time.Minute, "How long resolved alerts are re-sent to Alertmanager.")
@@ -231,7 +231,7 @@ func run(ctx context.Context) error {
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })
 	g.Go(func() error { return mon.Run(ctx, events) })
 	if runOpts.listen != "" {
-		srv := healthServer(runOpts.listen, mon, time.Now())
+		srv := healthServer(runOpts.listen, mon.LastEvaluation, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("listen %s: %w", runOpts.listen, err)
@@ -250,21 +250,46 @@ func run(ctx context.Context) error {
 	return err
 }
 
-// healthServer serves /healthz: OK while evaluations run. Before the first
-// evaluation (initial sync of a big cluster) it is OK for 10 minutes.
-func healthServer(addr string, mon *monitor.Monitor, started time.Time) *http.Server {
+// startupGrace is how long /healthz is OK before the first evaluation.
+const startupGrace = 10 * time.Minute
+
+// healthServer serves the probes:
+//
+//   - /readyz: OK while the last evaluation is recent; not OK before the
+//     first one, so the Pod is Ready only once konmon really monitors. For
+//     the readiness and the startup probe: the startup probe's
+//     failureThreshold × periodSeconds is how long the first evaluation (the
+//     initial sync) may take.
+//   - /healthz: like /readyz, but OK for startupGrace before the first
+//     evaluation. For the liveness probe; the grace keeps a Deployment
+//     without a startup probe from killing a slow initial sync.
+func healthServer(addr string, lastEvaluation func() time.Time, started time.Time, evalInterval time.Duration) *http.Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		last := lastEvaluation()
+		probeResponse(w, evaluatedRecently(last, time.Now(), evalInterval), last)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		last := mon.LastEvaluation()
+		last := lastEvaluation()
 		now := time.Now()
-		ok := (last.IsZero() && now.Sub(started) < 10*time.Minute) ||
-			(!last.IsZero() && now.Sub(last) < 3*runOpts.evalInterval+time.Minute)
-		if !ok {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, "last evaluation: %s\n", formatTime(last))
-			return
-		}
-		_, _ = fmt.Fprintf(w, "ok, last evaluation: %s\n", formatTime(last))
+		ok := evaluatedRecently(last, now, evalInterval) ||
+			(last.IsZero() && now.Sub(started) < startupGrace)
+		probeResponse(w, ok, last)
 	})
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+}
+
+// evaluatedRecently: an evaluation finished, and the last one is less than
+// three intervals (plus a minute for a slow one) ago.
+func evaluatedRecently(last, now time.Time, evalInterval time.Duration) bool {
+	return !last.IsZero() && now.Sub(last) < 3*evalInterval+time.Minute
+}
+
+func probeResponse(w http.ResponseWriter, ok bool, last time.Time) {
+	if !ok {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprintf(w, "last evaluation: %s\n", formatTime(last))
+		return
+	}
+	_, _ = fmt.Fprintf(w, "ok, last evaluation: %s\n", formatTime(last))
 }

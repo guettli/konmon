@@ -394,7 +394,9 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 			}
 		}
 	}
-	m.lastEval.Store(now.UnixMilli())
+	if m.lastEval.Swap(now.UnixMilli()) == 0 {
+		m.cfg.Log.Info("first evaluation finished", "open", len(open))
+	}
 	if m.notifier == nil {
 		return nil
 	}

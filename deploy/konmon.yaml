@@ -106,18 +106,26 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # /readyz is OK once konmon has evaluated, so the Pod is Ready (and a
+          # rollout complete) only when it really monitors. The initial sync
+          # may take up to 10 minutes (60 × 10s) on a big cluster; liveness and
+          # readiness start after it.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
-            initialDelaySeconds: 10
           # /healthz fails when evaluations stop; a restart lists everything
           # again.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 60
             periodSeconds: 30
           volumeMounts:
             - name: data
