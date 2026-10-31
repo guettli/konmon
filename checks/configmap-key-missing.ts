@@ -35,7 +35,7 @@ export default defineCheck({
       }
     };
     const spec = pod.spec ?? {};
-    for (const c of [...(spec.initContainers ?? []), ...(spec.containers ?? [])]) {
+    for (const c of [...(spec.initContainers ?? []), ...(spec.containers ?? []), ...(spec.ephemeralContainers ?? [])]) {
       for (const e of c.env ?? []) {
         const ref = e.valueFrom?.configMapKeyRef;
         if (ref) check(ref.name, [ref.key], ref.optional);

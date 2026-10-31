@@ -8,6 +8,17 @@ cases:
       spec: {gatewayClassName: cilium}
     expect:
       - {message: Gateway uses the GatewayClass cilium which does not exist}
+  - name: route attached to two listeners of a missing gateway
+    resource: httproutes.gateway.networking.k8s.io
+    available: [gateways.gateway.networking.k8s.io, services]
+    object:
+      metadata: {name: r, namespace: app}
+      spec:
+        parentRefs:
+          - {name: gw, namespace: infra, sectionName: http}
+          - {name: gw, namespace: infra, sectionName: https}
+    expect:
+      - {key: parent/infra/gw, message: HTTPRoute uses the Gateway infra/gw which does not exist}
   - name: route with missing parent, missing backend and wrong port
     resource: httproutes.gateway.networking.k8s.io
     available: [gateways.gateway.networking.k8s.io]

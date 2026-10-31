@@ -61,7 +61,7 @@ func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 			continue
 		}
 		for _, f := range args.Check(it.Obj, it.GVR, now) {
-			if intendedDifference(&f) {
+			if intendedDifference(&f, now) {
 				continue
 			}
 			want[goKey(&f)] = true
@@ -110,7 +110,7 @@ func compareWithCheckConditions(t *testing.T, items []Item, now time.Time) {
 
 // intendedDifference reports findings of check-conditions which the
 // konmon checks deliberately do not report (rules added after the port).
-func intendedDifference(f *checkconditions.Finding) bool {
+func intendedDifference(f *checkconditions.Finding, now time.Time) bool {
 	if f.Kind != checkconditions.FindingCondition || len(f.ConditionTypes) != 1 {
 		return false
 	}
@@ -118,6 +118,10 @@ func intendedDifference(f *checkconditions.Finding) bool {
 	case f.ConditionTypes[0] == "Suspended" && f.Status == "False":
 		return true
 	case f.GVR.Resource == "horizontalpodautoscalers" && f.ConditionTypes[0] == "ScalingLimited" && f.Reason == "TooFewReplicas":
+		return true
+	case f.GVR.Resource == "pods" && f.ConditionTypes[0] == "Ready" && f.Status == "False" &&
+		now.Sub(f.LastTransitionTime) < 30*time.Second:
+		// The start grace covers Ready too, check-conditions only ContainersReady.
 		return true
 	}
 	return false
