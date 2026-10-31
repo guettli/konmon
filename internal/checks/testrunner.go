@@ -81,13 +81,14 @@ var defaultTestNow = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // Tested reports whether RunTests applies to a test file: its check is
 // enabled and, for a test of a core check, not replaced by a user check.
+// A user test of a check which does not exist runs (and fails).
 func (e *Engine) Tested(tf *TestFile, core bool) bool {
 	for _, d := range e.defs {
 		if d.Name == tf.Check {
 			return !core || d.Core
 		}
 	}
-	return !core
+	return !core && !e.defined[tf.Check]
 }
 
 // RunTests runs the cases of a test file against the check of that name.

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/signal"
 	"path"
@@ -74,15 +73,9 @@ Examples:
   konmon check -n my-app --category health
   konmon check conditions 'pod-*'
   konmon check -o json | jq '.findings[] | select(.severity == "critical")'`,
-	Args:          cobra.ArbitraryArgs,
-	SilenceErrors: true,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		err := check(cmd.Context(), cmd, args)
-		var exit exitError
-		if err != nil && !errors.As(err, &exit) {
-			cmd.PrintErrln("Error:", err)
-		}
-		return err
+		return check(cmd.Context(), cmd, args)
 	},
 }
 

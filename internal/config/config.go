@@ -43,7 +43,7 @@ type ConditionRules struct {
 
 // IgnoreRule drops the findings it matches. All fields which are set must
 // match; Check, Resource, Namespace, Name, Condition, Container and Key are
-// glob patterns (path.Match), Message is a regular expression.
+// glob patterns (path.Match, but "*" also matches "/"), Message is a regular expression.
 type IgnoreRule struct {
 	Check     string `yaml:"check,omitempty"`
 	Resource  string `yaml:"resource,omitempty"` // resource.group, as in --exclude-resource
@@ -194,6 +194,9 @@ func (r *IgnoreRule) Compile() error {
 	if matchesAll {
 		return errors.New("a rule needs at least one of check, resource, namespace, name, condition, container, key, message, other than \"*\"")
 	}
+	if r.Check == checks.ErrorCheck && strings.Trim(r.Key, "*") == "" {
+		return errors.New("a rule for check-error needs key: the name of the failing check")
+	}
 	if strings.TrimSpace(r.Comment) == "" {
 		return errors.New("comment is required: say why these findings are fine")
 	}
@@ -263,11 +266,13 @@ func matchCondition(pattern, condition string) bool {
 	return false
 }
 
+// glob is path.Match, except that "*" also matches "/": keys like
+// "backend/ns/svc:80" have slashes.
 func glob(pattern, s string) bool {
 	if pattern == "" {
 		return true
 	}
-	ok, _ := path.Match(pattern, s)
+	ok, _ := path.Match(strings.ReplaceAll(pattern, "/", "\x00"), strings.ReplaceAll(s, "/", "\x00"))
 	return ok
 }
 

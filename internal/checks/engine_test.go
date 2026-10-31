@@ -112,6 +112,34 @@ export default defineCheck({
 	}
 }
 
+func TestFindingsMayHoldPartsOfObjects(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "parts",
+  match: { resources: ["pods"] },
+  check(obj) {
+    return [
+      { key: "a", message: "m", details: obj.metadata as any },
+      { key: "b", message: "m", details: { first: obj.status.conditions[0] as any } },
+    ];
+  },
+});`)
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 0 {
+		t.Fatalf("failures: %v", res.Failures)
+	}
+	if len(res.Findings) != 2 {
+		t.Fatalf("findings: %+v", res.Findings)
+	}
+	if got := res.Findings[0].Details["name"]; got != "a" {
+		t.Errorf("details from an object: %v", res.Findings[0].Details)
+	}
+	if got := res.Findings[1].Details["first"]; got != "map[status:False type:Zeta]" {
+		t.Errorf("a nested object: %q", got)
+	}
+}
+
 func TestGetListAndReads(t *testing.T) {
 	e := load(t, `
 import { defineCheck } from "konmon";
@@ -414,6 +442,20 @@ func TestCoreTestsOfReplacedChecksAreSkipped(t *testing.T) {
 		if got := e.Tested(tf, true); got != want {
 			t.Errorf("Tested(%s) = %v, want %v", tf.Check, got, want)
 		}
+	}
+}
+
+func TestUserTestsOfDisabledChecksAreSkipped(t *testing.T) {
+	mine := `export default { name: "mine", match: { resources: ["pods"] }, check() { return []; } };`
+	e, err := Load(nil, []Source{{Path: "mine.js", Code: mine}}, Options{Disabled: []string{"mine"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Tested(&TestFile{Check: "mine"}, false) {
+		t.Error("the test of a disabled user check runs")
+	}
+	if !e.Tested(&TestFile{Check: "typo"}, false) {
+		t.Error("the test of a check which does not exist must run and fail")
 	}
 }
 

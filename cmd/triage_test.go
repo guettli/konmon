@@ -175,6 +175,27 @@ func TestTriageCheckErrorLadder(t *testing.T) {
 	}
 }
 
+func TestTriageSnoozeCheckErrorOnlyThatCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	boom := &checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Severity: "warning", Key: "boom", Message: "check boom failed"}
+	bang := &checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Severity: "warning", Key: "bang", Message: "check bang failed"}
+	out := runTriage(t, path, "s\n\n\nq\n", boom, bang)
+	if !strings.Contains(out, "[1/2]") {
+		t.Errorf("want one group per failing check:\n%s", out)
+	}
+	cfg, err := config.Load([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ignore) != 1 || cfg.Ignore[0].Key == "" {
+		t.Fatalf("rules: %+v", cfg.Ignore)
+	}
+	other := &checks.Finding{Check: checks.ErrorCheck, Key: "my-new-check", Message: "check my-new-check failed"}
+	if cfg.Ignored(other, time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) != nil {
+		t.Errorf("the snooze hides another failing check: %+v", cfg.Ignore[0])
+	}
+}
+
 func TestTriageRejectsPastUntil(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "konmon.yaml")
 	out := runTriage(t, path, "s\n2020-01-01\n3d\n\n", conditionFinding("a", "w1", "Ready", "False", "Down"))

@@ -41,6 +41,8 @@ Monitoring:  konmon run, which keeps a local copy with history in SQLite
 False positives: 'konmon triage' fixes them in your config file, and
 'konmon report' tells the maintainers.`,
 	SilenceUsage: true,
+	// Execute prints errors: an exitError only sets the exit code.
+	SilenceErrors: true,
 }
 
 // Execute runs the root command.
@@ -50,6 +52,7 @@ func Execute() {
 		if errors.As(err, &exit) {
 			os.Exit(int(exit))
 		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }

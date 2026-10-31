@@ -220,6 +220,9 @@ func groupFindings(findings []*checks.Finding, hist *historyData, now time.Time)
 			status: f.Details["status"], reason: f.Details["reason"],
 		}
 		key := strings.Join([]string{g.check, g.resource, g.condition, g.status, g.reason}, "|")
+		if f.Check == checks.ErrorCheck {
+			key += "|" + f.Key // one group per failing check
+		}
 		if old, ok := byKey[key]; ok {
 			g = old
 		} else {
@@ -506,6 +509,10 @@ var globSpecial = regexp.MustCompile(`[*?\[\\]`)
 // groupRule matches the findings of the group everywhere.
 func groupRule(g *triageGroup) config.IgnoreRule {
 	r := config.IgnoreRule{Check: globQuote(g.check), Resource: globQuote(g.resource), Condition: globQuote(g.condition)}
+	if g.check == checks.ErrorCheck {
+		// Only the failures of this check, never every failing check.
+		r.Key = globQuote(g.findings[0].Key)
+	}
 	if g.check == "conditions" && g.condition != "" {
 		// The message of the conditions check starts with this.
 		r.Message = "^" + regexp.QuoteMeta(fmt.Sprintf("Condition %s=%s %s ", g.condition, g.status, g.reason))

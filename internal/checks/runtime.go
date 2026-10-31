@@ -366,7 +366,7 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return nil, nil
 	}
-	exported, ok := v.Export().([]any)
+	exported, ok := unwrap(v.Export()).([]any)
 	if !ok {
 		return nil, fmt.Errorf("check returned %s, want an array of findings", v.ExportType())
 	}
