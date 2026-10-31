@@ -469,7 +469,8 @@ func (t *triageSession) teach(g *triageGroup) (bool, error) {
 	if answer == "a" {
 		resource = "*"
 	}
-	if err := t.editor.Teach(resource, list, types); err != nil {
+	resource, err = t.editor.Teach(resource, list, types)
+	if err != nil {
 		return false, err
 	}
 	if err := t.save(); err != nil {

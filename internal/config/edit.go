@@ -112,22 +112,23 @@ const (
 
 // Teach adds condition types to the polarity of a resource type
 // (resource.group or "*"). list is HealthyWhenTrue, HealthyWhenFalse or
-// IgnoreTypes. A type which is already in another list is moved.
-func (e *Editor) Teach(resource, list string, types []string) error {
+// IgnoreTypes. A type which is already in another list is moved. It returns
+// the key in conditions, which keeps the case of an existing key.
+func (e *Editor) Teach(resource, list string, types []string) (string, error) {
 	if !slices.Contains([]string{HealthyWhenTrue, HealthyWhenFalse, IgnoreTypes}, list) {
-		return fmt.Errorf("unknown polarity %q", list)
+		return "", fmt.Errorf("unknown polarity %q", list)
 	}
 	conditions := value(e.root, "conditions", yaml.MappingNode)
 	if conditions.Kind != yaml.MappingNode {
-		return errors.New("conditions is not a mapping")
+		return "", errors.New("conditions is not a mapping")
 	}
 	resource, err := conditionsKey(conditions, resource)
 	if err != nil {
-		return err
+		return "", err
 	}
 	rules := value(conditions, resource, yaml.MappingNode)
 	if rules.Kind != yaml.MappingNode {
-		return fmt.Errorf("conditions %s is not a mapping", resource)
+		return "", fmt.Errorf("conditions %s is not a mapping", resource)
 	}
 	for _, other := range []string{HealthyWhenTrue, HealthyWhenFalse, IgnoreTypes} {
 		if other == list {
@@ -158,7 +159,7 @@ func (e *Editor) Teach(resource, list string, types []string) error {
 			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: t})
 		}
 	}
-	return nil
+	return resource, nil
 }
 
 // conditionsKey returns the key in conditions which means the same resource

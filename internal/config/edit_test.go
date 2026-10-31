@@ -16,7 +16,7 @@ func TestEditorNewFile(t *testing.T) {
 	if err := e.AddIgnore(&IgnoreRule{Check: "conditions", Resource: "widgets.example.com", Condition: "Stalled", Comment: "normal"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled", "Degraded"}); err != nil {
+	if _, err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled", "Degraded"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.AddAcknowledged(&IgnoreRule{Check: "pvc-not-bound", Namespace: "db", Comment: "known, ticket 7"}); err != nil {
@@ -75,10 +75,10 @@ conditions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled"}); err != nil {
+	if _, err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Teach("pods", IgnoreTypes, []string{"Flaky"}); err != nil {
+	if _, err := e.Teach("pods", IgnoreTypes, []string{"Flaky"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.AddIgnore(&IgnoreRule{Check: "b", Until: "2027-01-31", Comment: "y"}); err != nil {
@@ -183,8 +183,12 @@ func TestEditorTeachFindsTheKeyInAnyCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A second key for the same resource type would make the file invalid.
-	if err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled"}); err != nil {
+	key, err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if key != "Widgets.Example.COM" {
+		t.Errorf("key %q", key)
 	}
 	if err := e.Save(); err != nil {
 		t.Fatal(err)
@@ -197,7 +201,7 @@ func TestEditorTeachFindsTheKeyInAnyCase(t *testing.T) {
 	if string(data) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", data, want)
 	}
-	if err := e.Teach("no/such", HealthyWhenFalse, []string{"Stalled"}); err == nil {
+	if _, err := e.Teach("no/such", HealthyWhenFalse, []string{"Stalled"}); err == nil {
 		t.Error("want an error for an invalid resource")
 	}
 }
