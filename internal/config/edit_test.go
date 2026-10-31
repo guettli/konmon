@@ -168,3 +168,36 @@ func TestEditorFlowStyleListBecomesBlock(t *testing.T) {
 		t.Errorf("got:\n%s", data)
 	}
 }
+
+func TestEditorTeachFindsTheKeyInAnyCase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	orig := `conditions:
+  Widgets.Example.COM:
+    healthyWhenTrue: [Stalled]
+`
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e, err := OpenEditor(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second key for the same resource type would make the file invalid.
+	if err := e.Teach("widgets.example.com", HealthyWhenFalse, []string{"Stalled"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	want := `conditions:
+  Widgets.Example.COM:
+    healthyWhenFalse: [Stalled]
+`
+	if string(data) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", data, want)
+	}
+	if err := e.Teach("no/such", HealthyWhenFalse, []string{"Stalled"}); err == nil {
+		t.Error("want an error for an invalid resource")
+	}
+}

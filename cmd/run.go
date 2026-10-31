@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/signal"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -83,10 +84,12 @@ func init() {
 }
 
 func globMatcher(patterns []string) (func(schema.GroupResource) bool, error) {
-	for _, p := range patterns {
+	patterns = slices.Clone(patterns)
+	for i, p := range patterns {
 		if _, err := path.Match(p, ""); err != nil {
 			return nil, fmt.Errorf("invalid pattern %q: %w", p, err)
 		}
+		patterns[i] = strings.ToLower(p) // resource names are lowercase
 	}
 	return func(gr schema.GroupResource) bool {
 		s := gr.String()

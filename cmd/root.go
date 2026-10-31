@@ -99,7 +99,7 @@ func splitResourceName(s string) (resource, group, name string, err error) {
 	if !ok || resource == "" || name == "" {
 		return "", "", "", fmt.Errorf("expected RESOURCE/NAME, e.g. pods/my-pod or deployments.apps/my-app, got %q", s)
 	}
-	resource, group, _ = strings.Cut(resource, ".")
+	resource, group, _ = strings.Cut(strings.ToLower(resource), ".")
 	return resource, group, name, nil
 }
 
