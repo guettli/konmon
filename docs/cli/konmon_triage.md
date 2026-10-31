@@ -50,7 +50,7 @@ konmon triage [CHECK...] [flags]
       --ignore-older-than string           Hide findings whose problem started before this: a duration (24h: unchanged for a day) or an RFC3339 timestamp. Combine with --ignore-younger-than for a time window.
       --ignore-younger-than string         Hide findings whose problem started more recently than this: a duration (5m: started in the last 5 minutes) or an RFC3339 timestamp. Findings without a start time (e.g. a missing resource request) are always shown.
       --kubeconfig string                  Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
-  -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed.
+  -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed. A type which may not be listed in all namespaces (RBAC) is listed in each of them, if there is no glob pattern.
   -o, --output string                      Output format: text or json. (default "text")
       --use-db                             Read condition history for checks from --db.
 ```

@@ -174,6 +174,10 @@ type Failure struct {
 	// Object is namespace/name, for messages.
 	Object string
 	Err    error
+	// Uncovered: the check read a type in a namespace whose objects could
+	// not be listed (RBAC, see Snapshot.SetPartial). That is no problem of
+	// the cluster: no ErrorCheck finding.
+	Uncovered bool
 }
 
 // Result of one evaluation.

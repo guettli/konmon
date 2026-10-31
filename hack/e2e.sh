@@ -71,6 +71,31 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
+echo "--- a user of namespace e2e only (view Role there) gets the same finding with -n e2e"
+kubectl --context "$ctx" -n e2e create serviceaccount viewer --dry-run=client -o yaml | kubectl --context "$ctx" apply -f -
+kubectl --context "$ctx" -n e2e create rolebinding viewer --clusterrole=view --serviceaccount=e2e:viewer --dry-run=client -o yaml |
+  kubectl --context "$ctx" apply -f -
+kubeconfig=dist/viewer.kubeconfig
+kubectl --context "$ctx" config view --minify --flatten -o json |
+  jq --arg token "$(kubectl --context "$ctx" -n e2e create token viewer)" \
+    '.users[0].user = {token: $token}' >"$kubeconfig"
+for i in $(seq 1 10); do
+  set +e
+  out=$(./dist/konmon check --kubeconfig "$kubeconfig" -n e2e pod-container-waiting)
+  code=$?
+  set -e
+  if [ "$code" = 1 ] && grep -q "broken" <<<"$out" && grep -q "listed in e2e only: .*pods" <<<"$out"; then
+    echo "$out"
+    break
+  fi
+  if [ "$i" = 10 ]; then
+    echo "konmon check as a namespace user did not report the broken Deployment (exit $code):"
+    echo "$out"
+    exit 1
+  fi
+  sleep 3 # the RoleBinding is new
+done
+
 echo "--- the running konmon recorded it"
 for i in $(seq 1 30); do
   out=$(kubectl --context "$ctx" -n konmon exec deploy/konmon -- /konmon findings --db /data/konmon.db -n e2e --category health || true)

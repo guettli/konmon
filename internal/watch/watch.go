@@ -4,6 +4,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -61,6 +62,10 @@ type Watcher struct {
 	// initial list fails (e.g. a broken conversion webhook). Default 2m,
 	// to stay within the startup probe of a Pod (5m in gitops).
 	SyncTimeout time.Duration
+	// Namespaces, for ListOnce: a namespaced type which may not be listed
+	// in all namespaces (RBAC of a namespace user) is listed in each of
+	// these instead.
+	Namespaces []string
 
 	mu        sync.Mutex
 	informers map[schema.GroupResource]*running
@@ -229,12 +234,19 @@ type ListResult struct {
 	// Failed lists types (or API groups) which could not be listed or
 	// discovered for other reasons.
 	Failed []error
+	// PerNamespace types are in Available, but listing them in all
+	// namespaces is forbidden: their objects were only listed in these
+	// namespaces of Watcher.Namespaces.
+	PerNamespace map[schema.GroupVersionResource][]string
+	// ForbiddenIn are the namespaces of Watcher.Namespaces in which these
+	// PerNamespace types may not be listed.
+	ForbiddenIn map[string][]schema.GroupVersionResource
 }
 
 // ListOnce lists all objects of all included types once, without
 // informers, for an ad hoc check.
 func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
-	gvrs, partialErr, err := w.discover()
+	gvrs, namespaced, partialErr, err := w.discover()
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +258,10 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 		gvr       schema.GroupVersionResource
 		items     []Item
 		forbidden bool
-		err       error
+		// listedIn and forbiddenIn: per namespace, after listing all
+		// namespaces was forbidden.
+		listedIn, forbiddenIn []string
+		err                   error
 	}
 	results := make([]result, len(gvrs))
 	g, gctx := errgroup.WithContext(ctx)
@@ -254,16 +269,26 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 	for i, gvr := range gvrs {
 		g.Go(func() error {
 			r := result{gvr: gvr}
-			p := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
-				return w.Dynamic.Resource(gvr).List(ctx, opts)
-			})
-			err := p.EachListItem(gctx, metav1.ListOptions{}, func(obj runtime.Object) error {
-				if u, ok := obj.(*unstructured.Unstructured); ok {
-					u.SetManagedFields(nil)
-					r.items = append(r.items, Item{GVR: gvr, Obj: u})
+			var err error
+			r.items, err = w.list(gctx, gvr, metav1.NamespaceAll)
+			if apierrors.IsForbidden(err) && namespaced[gvr] && len(w.Namespaces) > 0 {
+				r.items = nil
+				for _, ns := range w.Namespaces {
+					items, nsErr := w.list(gctx, gvr, ns)
+					if apierrors.IsForbidden(nsErr) {
+						r.forbiddenIn = append(r.forbiddenIn, ns)
+						continue
+					}
+					if err = nsErr; err != nil {
+						break
+					}
+					r.items = append(r.items, items...)
+					r.listedIn = append(r.listedIn, ns)
 				}
-				return nil
-			})
+				if err == nil && len(r.listedIn) == 0 {
+					err = apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("in all namespaces of --namespace"))
+				}
+			}
 			switch {
 			case err == nil:
 			case apierrors.IsForbidden(err):
@@ -289,13 +314,39 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 		default:
 			res.Items = append(res.Items, r.items...)
 			res.Available = append(res.Available, r.gvr)
+			if len(r.listedIn) > 0 {
+				if res.PerNamespace == nil {
+					res.PerNamespace = map[schema.GroupVersionResource][]string{}
+					res.ForbiddenIn = map[string][]schema.GroupVersionResource{}
+				}
+				res.PerNamespace[r.gvr] = r.listedIn
+				for _, ns := range r.forbiddenIn {
+					res.ForbiddenIn[ns] = append(res.ForbiddenIn[ns], r.gvr)
+				}
+			}
 		}
 	}
 	return res, nil
 }
 
+// list lists the objects of a type in one namespace, or in all.
+func (w *Watcher) list(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]Item, error) {
+	var items []Item
+	p := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+		return w.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, opts)
+	})
+	err := p.EachListItem(ctx, metav1.ListOptions{}, func(obj runtime.Object) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			u.SetManagedFields(nil)
+			items = append(items, Item{GVR: gvr, Obj: u})
+		}
+		return nil
+	})
+	return items, err
+}
+
 func (w *Watcher) refresh(ctx context.Context) error {
-	gvrs, partialErr, err := w.discover()
+	gvrs, _, partialErr, err := w.discover()
 	if err != nil {
 		return err
 	}
@@ -368,18 +419,20 @@ func (w *Watcher) refresh(ctx context.Context) error {
 // discover returns the preferred version of every listable and watchable
 // resource type accepted by Include. partialErr is set if some API groups
 // could not be discovered.
-func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partialErr, err error) {
+// discover returns the types to watch, and which of them are namespaced.
+func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, namespaced map[schema.GroupVersionResource]bool, partialErr, err error) {
 	// The package-level helper is what DiscoveryClient.ServerPreferredResources
 	// uses; calling it directly also works with the fake discovery client.
 	lists, err := discovery.ServerPreferredResources(w.Discovery)
 	if err != nil {
 		if !discovery.IsGroupDiscoveryFailedError(err) || len(lists) == 0 {
-			return nil, nil, fmt.Errorf("server preferred resources: %w", err)
+			return nil, nil, nil, fmt.Errorf("server preferred resources: %w", err)
 		}
 		// Some API groups (often an orphaned APIService) failed. Go on with the rest.
 		w.Log.Warn("partial discovery", "err", err)
 		partialErr = fmt.Errorf("discovery: %w", err)
 	}
+	namespaced = map[schema.GroupVersionResource]bool{}
 	for _, list := range lists {
 		gv, err := schema.ParseGroupVersion(list.GroupVersion)
 		if err != nil {
@@ -395,9 +448,10 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, partialErr, er
 				continue
 			}
 			gvrs = append(gvrs, gvr)
+			namespaced[gvr] = r.Namespaced
 		}
 	}
-	return gvrs, partialErr, nil
+	return gvrs, namespaced, partialErr, nil
 }
 
 func hasVerbs(verbs metav1.Verbs, want ...string) bool {

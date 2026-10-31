@@ -77,7 +77,7 @@ export default defineCheck({
 ```
 
 - `check(obj, ctx)` runs for every object of the `match` types and returns findings: `message` (one line), and optionally `key` (to tell several findings of one object apart), `since` (konmon prints the age), `condition`, `container` and `details` (alert labels and annotations; objects and arrays are written as JSON).
-- `ctx.get(resource, namespace, name)` and `ctx.list(resource, {namespace, labels, owner})` read konmon's cache, never the API server. A check may read the types in its `match` and `reads`. Reading a type which is not available throws, so a missing CRD never looks like "no objects"; use `ctx.has(resource)` for optional types.
+- `ctx.get(resource, namespace, name)` and `ctx.list(resource, {namespace, labels, owner})` read konmon's cache, never the API server. A check may read the types in its `match` and `reads`. Reading a type which is not available throws, so a missing CRD never looks like "no objects"; use `ctx.has(resource)` for optional types. With `konmon check -n` of a user who may only read some namespaces, a type can be listed in those namespaces only: `ctx.has` is true, but reading it in another namespace (or in all, or by an owner which is not in one of them) throws, and the object is reported as not checked instead of as a finding.
 - `forSeconds` in the definition overrides `--for` for a check whose findings are normal for a while (e.g. `workload-not-ready`: 10 minutes). A finding may set its own `severity`.
 - `ctx.history.conditions(obj, since)` returns the recorded condition changes (needs `uses: ["history"]`), e.g. to report a condition which flaps.
 - Resource names are `resource.group` (`deployments.apps`); a name without a dot is the core group (`pods`).
