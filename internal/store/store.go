@@ -564,9 +564,10 @@ func (s *Store) FindingsAt(ctx context.Context, t time.Time) ([]FindingRow, erro
 	return scanFindings(rows)
 }
 
-// ResolvedSince returns findings resolved after t.
+// ResolvedSince returns findings resolved at or after t: with
+// --resend-resolved 0, a finding resolved now is still sent once.
 func (s *Store) ResolvedSince(ctx context.Context, t time.Time) ([]FindingRow, error) {
-	rows, err := s.db.QueryContext(ctx, findingSelect+" WHERE resolved_at > ? ORDER BY resolved_at, id", ms(t))
+	rows, err := s.db.QueryContext(ctx, findingSelect+" WHERE resolved_at >= ? ORDER BY resolved_at, id", ms(t))
 	if err != nil {
 		return nil, fmt.Errorf("read resolved findings: %w", err)
 	}

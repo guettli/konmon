@@ -115,3 +115,29 @@ func TestSyncedWaitsForTheEndOfDiscovery(t *testing.T) {
 		t.Error("not Synced after discovery with all informers synced")
 	}
 }
+
+func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	widgets := schema.GroupResource{Group: "example.com", Resource: "widgets"}
+	stuck := &running{gvr: widgets.WithVersion("v1"), synced: make(chan struct{}), started: time.Now()}
+	w := &Watcher{
+		Log: slog.New(slog.DiscardHandler), SyncTimeout: time.Minute, discovered: true,
+		informers: map[schema.GroupResource]*running{jobsGVR.GroupResource(): {gvr: jobsGVR, synced: done}, widgets: stuck},
+	}
+	if w.Synced() {
+		t.Error("Synced while an informer lists for the first time")
+	}
+	stuck.started = time.Now().Add(-2 * time.Minute)
+	if !w.Synced() {
+		t.Error("one broken resource type blocks Synced forever")
+	}
+	if p := w.Pending(); len(p) != 1 || p[0] != widgets {
+		t.Errorf("Pending() = %v", p)
+	}
+	// A type started later does not block evaluations again.
+	w.informers[widgets] = &running{gvr: widgets.WithVersion("v2"), synced: make(chan struct{}), started: time.Now()}
+	if !w.Synced() {
+		t.Error("a new informer blocks Synced after the first sync")
+	}
+}

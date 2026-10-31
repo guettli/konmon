@@ -100,3 +100,37 @@ func TestNotifyNothingToSend(t *testing.T) {
 		t.Fatalf("no alerts must not cause a request: %v", err)
 	}
 }
+
+func TestNotifyResolvesAnAlertWhoseLabelsChanged(t *testing.T) {
+	var got []Alert
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = nil
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	f := checks.Finding{Check: "c", Category: checks.CategoryHealth, Severity: "warning", Name: "web", UID: "u1", Message: "m"}
+	c := &Client{URLs: []string{srv.URL}, ResolveTimeout: 2 * time.Minute}
+	if err := c.Notify(context.Background(), now, []store.FindingRow{{Finding: f, FirstSeen: now}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.Severity = "critical"
+	later := now.Add(30 * time.Second)
+	if err := c.Notify(context.Background(), later, []store.FindingRow{{Finding: f, FirstSeen: now}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want the new alert and the old one resolved, got %+v", got)
+	}
+	if got[1].Labels["severity"] != "warning" || !got[1].EndsAt.Equal(later) {
+		t.Errorf("old alert not resolved: %+v", got[1])
+	}
+	if err := c.Notify(context.Background(), later.Add(30*time.Second), []store.FindingRow{{Finding: f, FirstSeen: now}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("the old alert is resolved only once, got %+v", got)
+	}
+}

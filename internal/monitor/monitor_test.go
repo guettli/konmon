@@ -22,9 +22,12 @@ var (
 )
 
 type fakeSource struct {
-	synced bool
-	items  []watch.Item
+	synced  bool
+	items   []watch.Item
+	pending []schema.GroupResource
 }
+
+func (f *fakeSource) Pending() []schema.GroupResource { return f.pending }
 
 func (f *fakeSource) Synced() bool           { return f.synced }
 func (f *fakeSource) Snapshot() []watch.Item { return f.items }
@@ -228,6 +231,43 @@ func TestEvaluateFiresAfterForAndResolves(t *testing.T) {
 	}
 	if len(n.resolved) != 0 {
 		t.Errorf("resolved alert should not be re-sent after ResendResolved: %+v", n.resolved)
+	}
+}
+
+func TestFiringAlertsStayWhileTheSourceIsNotSyncedOrPending(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	for _, at := range []time.Duration{0, time.Minute} {
+		if err := m.Evaluate(ctx, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(n.firing) != 1 {
+		t.Fatalf("want 1 firing, got %+v", n.firing)
+	}
+
+	// The informer of jobs is replaced (a new preferred version): its
+	// objects are missing, the finding stays open.
+	src.items, src.pending = nil, []schema.GroupResource{jobsGVR.GroupResource()}
+	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 || len(n.resolved) != 0 {
+		t.Errorf("pending type: want 1 firing, 0 resolved; got %d, %d", len(n.firing), len(n.resolved))
+	}
+
+	// Not synced (e.g. after a restart): no evaluation, but the open
+	// alerts are sent again.
+	src.synced = false
+	n.firing = nil
+	if err := m.Evaluate(ctx, t0.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 {
+		t.Errorf("not synced: want the firing alert again, got %+v", n.firing)
 	}
 }
 

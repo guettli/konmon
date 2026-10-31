@@ -28,6 +28,8 @@ type Source interface {
 	Snapshot() []watch.Item
 	// Available returns the types whose objects are fully known.
 	Available() []schema.GroupVersionResource
+	// Pending returns the watched types whose objects are not known yet.
+	Pending() []schema.GroupResource
 }
 
 // Notifier receives the state of all findings after each evaluation.
@@ -314,13 +316,20 @@ func Conditions(obj *unstructured.Unstructured, gvr schema.GroupVersionResource)
 	return result
 }
 
-// Evaluate runs the checks, updates the findings and notifies. It does
-// nothing until the source has synced: otherwise findings of objects which
-// are not listed yet would be resolved.
+// Evaluate runs the checks, updates the findings and notifies. It does not
+// evaluate until the source has synced: otherwise findings of objects which
+// are not listed yet would be resolved. Findings of types which are still
+// pending keep their state.
 func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	if !m.source.Synced() {
 		m.cfg.Log.Debug("not synced yet, skipping evaluation")
-		return nil
+		// Alerts of the store (from before a restart) are sent again, or
+		// Alertmanager would resolve them.
+		return m.notifyOpen(ctx, now)
+	}
+	pending := map[schema.GroupResource]struct{}{}
+	for _, gr := range m.source.Pending() {
+		pending[gr] = struct{}{}
 	}
 	var items []checks.Item
 	for _, it := range m.source.Snapshot() {
@@ -377,8 +386,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 
 	// A check which failed for an object keeps its previous findings for
 	// that object: otherwise they would resolve, and fire again later with
-	// a new start time.
+	// a new start time. The same for objects of a type which is pending.
 	keep := func(r *store.FindingRow) bool {
+		if _, ok := pending[r.Finding.GVR.GroupResource()]; ok {
+			return true
+		}
 		_, ok := failed[[2]string{r.Finding.Check, r.Finding.UID}]
 		return ok
 	}
