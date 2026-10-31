@@ -88,6 +88,21 @@ func TestAssess(t *testing.T) {
 			verdict: verdictReal, reason: "Ready became unhealthy within 10m after Stalled=True on 1 of 1 object",
 		},
 		{
+			name: "two types on one object count as one object", condition: "Failed/Stalled", status: "True", group: []string{"a"},
+			objects: []objectConditions{{uid: "a", conditions: map[string]store.Condition{"Failed": {Status: "True", LastTransitionTime: old}, "Stalled": {Status: "True", LastTransitionTime: old}, "Ready": {Status: "True"}}}},
+			history: map[string][]store.HistoryRow{"a": {row(30*time.Minute, "set", "Failed", "True"), row(30*time.Minute, "set", "Stalled", "True"), row(28*time.Minute, "set", "Ready", "False"), row(5*time.Minute, "set", "Ready", "True")}},
+			verdict: verdictReal, reason: "Ready became unhealthy within 10m after Failed/Stalled=True on 1 of 1 object",
+		},
+		{
+			name: "Ready was unhealthy before, only its reason changed", condition: "Stalled", status: "True", group: []string{"a"},
+			objects: []objectConditions{obj("a", "Stalled", "True", old, "False")},
+			history: map[string][]store.HistoryRow{"a": {row(20*time.Hour, "set", "Ready", "False"), row(60*time.Minute, "set", "Stalled", "True"), row(58*time.Minute, "set", "Ready", "False")}},
+		},
+		{
+			name: "objects the store does not know: no verdict about all of them", condition: "Stalled", status: "True", group: []string{"a", "b", "c"},
+			objects: []objectConditions{obj("a", "Stalled", "True", old, "True"), obj("b", "Stalled", "True", old, "True")},
+		},
+		{
 			name: "a removed row is not the bad state", condition: "Stalled", status: "True", group: []string{"a"},
 			objects: []objectConditions{obj("a", "Stalled", "True", recent, "True")},
 			history: map[string][]store.HistoryRow{"a": {row(30*time.Minute, "removed", "Stalled", "True"), row(25*time.Minute, "set", "Ready", "False"), row(5*time.Minute, "set", "Ready", "True")}},

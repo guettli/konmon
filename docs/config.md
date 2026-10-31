@@ -13,7 +13,7 @@ ignore:
     until: 2027-01-31               # optional, last day (UTC); then konmon warns and reports again
 ```
 
-All fields which are set must match; `check`, `resource`, `namespace`, `name`, `condition`, `container` and `key` are globs (quote a glob which starts with `*`: `name: "*-test"`). A `namespace` pattern never matches cluster-scoped objects. Unknown fields, a second YAML document (`---`) and a rule which matches everything are errors, so a typo never ignores everything or nothing. A failing check (`check-error`) is only hidden by a rule with `check: check-error` and `key: <name of the failing check>`. `konmon check` says how many findings were ignored; `konmon run` logs `finding ignored` with the rule.
+All fields which are set must match; `check`, `resource`, `namespace`, `name`, `condition`, `container` and `key` are globs, where `*` also matches `/` (quote a glob which starts with `*`: `name: "*-test"`). A `namespace` pattern never matches cluster-scoped objects. Unknown fields, a second YAML document (`---`) and a rule which matches everything are errors, so a typo never ignores everything or nothing. A failing check (`check-error`) is only hidden by a rule with `check: check-error` and `key: <name of the failing check>`. `konmon check` says how many findings were ignored; `konmon run` logs `finding ignored` with the rule.
 
 `konmon findings --config new.yaml` applies the rules to the findings a running konmon stored, to try a stricter config before deploying it (findings which the running config already ignores are not stored). See [examples/konmon.yaml](../examples/konmon.yaml).
 

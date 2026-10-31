@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -362,11 +363,24 @@ func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, resource *goja.Object
 	return toFindings(lc.def, item, v)
 }
 
+// detailValue formats a value of details: objects and arrays as JSON (an
+// error for cycles), other values with fmt.
+func detailValue(v any) (string, error) {
+	switch t := v.(type) {
+	case string:
+		return t, nil
+	case map[string]any, []any, *roObject, *roArray:
+		b, err := json.Marshal(v)
+		return string(b), err
+	}
+	return fmt.Sprint(v), nil
+}
+
 func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return nil, nil
 	}
-	exported, ok := v.Export().([]any)
+	exported, ok := unwrap(v.Export()).([]any)
 	if !ok {
 		return nil, fmt.Errorf("check returned %s, want an array of findings", v.ExportType())
 	}
@@ -376,7 +390,7 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 	keys := map[string]struct{}{}
 	findings := make([]Finding, 0, len(exported))
 	for i, e := range exported {
-		m, ok := e.(map[string]any)
+		m, ok := unwrap(e).(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("finding %d is %T, want an object", i, e)
 		}
@@ -411,14 +425,17 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 			}
 		}
 		if dm, ok := m["details"]; ok && dm != nil {
-			mm, ok := dm.(map[string]any)
+			mm, ok := unwrap(dm).(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("finding %d: details must be an object", i)
 			}
 			f.Details = make(map[string]string, len(mm))
 			for k, v := range mm {
-				if v != nil {
-					f.Details[k] = fmt.Sprint(v)
+				if v == nil {
+					continue
+				}
+				if f.Details[k], err = detailValue(v); err != nil {
+					return nil, fmt.Errorf("finding %d: details.%s: %w", i, k, err)
 				}
 			}
 		}

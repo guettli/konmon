@@ -141,7 +141,7 @@ func (h *historyData) assess(g *triageGroup, now time.Time) evidence {
 		if !hasReady || ready.Status != "True" || slices.Contains(types, "Ready") {
 			allReady = false
 		}
-		objFlaps := true
+		objFlaps, objCorrelated := true, false
 		for _, typ := range types {
 			c, ok := o.conditions[typ]
 			if !ok || c.Status != g.status {
@@ -156,7 +156,7 @@ func (h *historyData) assess(g *triageGroup, now time.Time) evidence {
 			}
 			n, corr, readyBad := h.changes(o.uid, typ, g.status)
 			if corr {
-				correlated++
+				objCorrelated = true
 			}
 			if readyBad {
 				readyStable = false
@@ -168,12 +168,17 @@ func (h *historyData) assess(g *triageGroup, now time.Time) evidence {
 		if objFlaps {
 			flapping++
 		}
+		if objCorrelated {
+			correlated++
+		}
 	}
 	if correlated > 0 {
 		return evidence{verdictReal, fmt.Sprintf("Ready became unhealthy within %s after %s on %d of %s",
 			roundDuration(correlatedWithin), what, correlated, plural(len(objects), "object"))}
 	}
-	if g.status != "True" && g.status != "False" {
+	// The other verdicts speak about every object of the group: not when
+	// the store does not know some of them (another --exclude-namespace).
+	if (g.status != "True" && g.status != "False") || len(objects) < len(inGroup) {
 		return evidence{}
 	}
 	sameEverywhere := true
@@ -198,10 +203,12 @@ func (h *historyData) assess(g *triageGroup, now time.Time) evidence {
 }
 
 // changes counts the status changes of a condition type of one object, and
-// reports whether Ready became unhealthy shortly after the type got status,
-// and whether Ready was unhealthy at any time of the window.
+// reports whether Ready became unhealthy shortly after the type got status
+// (a change from True, or the first Ready row of the window: a reason
+// change while Ready stays False is not), and whether Ready was unhealthy
+// at any time of the window.
 func (h *historyData) changes(uid, typ, status string) (n int, correlated, readyBad bool) {
-	var last string
+	var last, lastReady string
 	var badAt time.Time
 	for _, r := range h.history[uid] {
 		if r.Change == "removed" {
@@ -217,11 +224,13 @@ func (h *historyData) changes(uid, typ, status string) (n int, correlated, ready
 				badAt = r.ObservedAt
 			}
 		case "Ready":
+			wasHealthy := lastReady == "" || lastReady == "True"
+			lastReady = r.Status
 			if r.Status == "True" {
 				continue
 			}
 			readyBad = true
-			if typ != "Ready" && !badAt.IsZero() && !r.ObservedAt.Before(badAt) && r.ObservedAt.Sub(badAt) <= correlatedWithin {
+			if typ != "Ready" && wasHealthy && !badAt.IsZero() && !r.ObservedAt.Before(badAt) && r.ObservedAt.Sub(badAt) <= correlatedWithin {
 				correlated = true
 			}
 		}

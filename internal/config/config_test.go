@@ -37,6 +37,11 @@ ignore:
   - check: check-error
     key: x
     comment: known broken check
+  - check: gateway-references-missing
+    key: backend/*
+    comment: backends are created later
+  - check: check-error
+    comment: written by an old triage
 `), "konmon.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +64,9 @@ ignore:
 		{widget("", "Stalled", "Waiting for x"), now, -1},                                        // cluster-scoped: namespace: team-* does not match
 		{&checks.Finding{Check: checks.ErrorCheck, Message: "check conditions failed"}, now, -1}, // a broad rule never hides a failing check
 		{&checks.Finding{Check: checks.ErrorCheck, Key: "x"}, now, 2},
+		{&checks.Finding{Check: "gateway-references-missing", Key: "backend/d/svc:80"}, now, 3}, // "*" matches "/"
+		{&checks.Finding{Check: "gateway-references-missing", Key: "parent/d/gw"}, now, -1},
+		{&checks.Finding{Check: checks.ErrorCheck, Key: "y"}, now, -1}, // a check-error rule needs the key
 	}
 	for i, c := range cases {
 		got := -1
