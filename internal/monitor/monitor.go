@@ -325,11 +325,19 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		m.cfg.Log.Debug("not synced yet, skipping evaluation")
 		// Alerts of the store (from before a restart) are sent again, or
 		// Alertmanager would resolve them.
-		return m.notifyOpen(ctx, now)
+		return m.notifyOpen(ctx, now, 4*m.cfg.EvalInterval)
 	}
+	// Objects of pending types are missing: findings of these types, and
+	// of checks which read them, keep their state.
 	pending := map[schema.GroupResource]struct{}{}
+	pendingChecks := map[string]struct{}{}
 	for _, gr := range m.source.Pending() {
 		pending[gr] = struct{}{}
+		for _, d := range m.cfg.Checks.Checks() {
+			if d.DependsOn(gr) {
+				pendingChecks[d.Name] = struct{}{}
+			}
+		}
 	}
 	var items []checks.Item
 	for _, it := range m.source.Snapshot() {
@@ -354,7 +362,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	cancel()
 	if err != nil {
 		nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		nerr := m.notifyOpen(nctx, now)
+		nerr := m.notifyOpen(nctx, now, 0)
 		ncancel()
 		if nerr != nil {
 			m.cfg.Log.Error("notify after aborted evaluation", "err", nerr)
@@ -389,6 +397,9 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	// a new start time. The same for objects of a type which is pending.
 	keep := func(r *store.FindingRow) bool {
 		if _, ok := pending[r.Finding.GVR.GroupResource()]; ok {
+			return true
+		}
+		if _, ok := pendingChecks[r.Finding.Check]; ok {
 			return true
 		}
 		_, ok := failed[[2]string{r.Finding.Check, r.Finding.UID}]
@@ -457,8 +468,11 @@ func (m *Monitor) forOf(f *checks.Finding) time.Duration {
 	return m.cfg.For
 }
 
-// notifyOpen sends the findings which are firing according to the store.
-func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
+// notifyOpen sends the findings which fired at their last evaluation,
+// according to the store. maxAge (0: any) skips findings not seen for
+// longer: after a long downtime the store is stale, Alertmanager has
+// resolved them, and the next evaluation tells.
+func (m *Monitor) notifyOpen(ctx context.Context, now time.Time, maxAge time.Duration) error {
 	if m.notifier == nil {
 		return nil
 	}
@@ -468,7 +482,8 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
 	}
 	var firing []store.FindingRow
 	for _, r := range open {
-		if r.ResolvedAt.IsZero() && now.Sub(r.FirstSeen) >= m.forOf(&r.Finding) && r.Finding.Category == checks.CategoryHealth {
+		if r.ResolvedAt.IsZero() && r.LastSeen.Sub(r.FirstSeen) >= m.forOf(&r.Finding) &&
+			(maxAge == 0 || now.Sub(r.LastSeen) < maxAge) && r.Finding.Category == checks.CategoryHealth {
 			firing = append(firing, r)
 		}
 	}

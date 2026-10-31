@@ -58,7 +58,8 @@ type Watcher struct {
 	Events chan<- any
 	Log    *slog.Logger
 	// SyncTimeout: Synced does not wait longer for an informer whose
-	// initial list fails (e.g. a broken conversion webhook). Default 5m.
+	// initial list fails (e.g. a broken conversion webhook). Default 2m,
+	// to stay within the startup probe of a Pod (5m in gitops).
 	SyncTimeout time.Duration
 
 	mu        sync.Mutex
@@ -139,7 +140,7 @@ func (w *Watcher) Synced() bool {
 	}
 	timeout := w.SyncTimeout
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = 2 * time.Minute
 	}
 	var late []string
 	for _, r := range w.informers {
@@ -306,14 +307,18 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		}
 		w.Log.Info("stop watching", "resource", r.gvr.String())
 		r.cancel()
-		delete(w.informers, gr)
-		if !ok {
-			gone = append(gone, r.gvr)
+		if ok {
+			// A new preferred version: pending until start replaces it,
+			// so its objects are not taken for gone in between.
+			w.informers[gr] = &running{gvr: gvr, cancel: func() {}, synced: make(chan struct{}), started: time.Now()}
+			continue
 		}
+		delete(w.informers, gr)
+		gone = append(gone, r.gvr)
 	}
 	var toStart []schema.GroupVersionResource
 	for gr, gvr := range wanted {
-		if _, ok := w.informers[gr]; !ok {
+		if r, ok := w.informers[gr]; !ok || r.informer == nil {
 			toStart = append(toStart, gvr)
 		}
 	}
@@ -333,6 +338,9 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		}
 		if err := w.probe(ctx, gvr); err != nil {
 			w.mu.Lock()
+			if r, ok := w.informers[gvr.GroupResource()]; ok && r.informer == nil {
+				delete(w.informers, gvr.GroupResource()) // the placeholder of a version change
+			}
 			_, known := w.forbidden[gvr.GroupResource()]
 			w.forbidden[gvr.GroupResource()] = struct{}{}
 			w.mu.Unlock()
