@@ -13,7 +13,13 @@ and only the resource types they need are listed.
 
 Exit codes: 0 no health findings; 1 health findings; 2 no health findings,
 but some resource types or API groups could not be listed (other than
-forbidden ones, which are printed). Other errors also exit with 1.
+forbidden ones, which are printed); 3 konmon could not check (invalid
+flags, cluster not reachable, --timeout).
+
+--repeat runs the check again and again, --while until no health finding
+matches a regular expression: 'konmon check --while StillProvisioning;
+music' plays music once the condition is gone. In both, network errors
+are printed and retried.
 
 Checks which use condition history need --use-db: the history is read from
 the database of a running 'konmon run' (--db).
@@ -23,6 +29,8 @@ Examples:
   konmon check -n my-app --category health
   konmon check conditions 'pod-*'
   konmon check -o json | jq '.findings[] | select(.severity == "critical")'
+  konmon check --while . --timeout 10m   # wait until healthy
+  konmon check --repeat --ignore-younger-than 5m
 
 ```
 konmon check [CHECK...] [flags]
@@ -43,10 +51,17 @@ konmon check [CHECK...] [flags]
   -h, --help                               help for check
       --history-window duration            How much condition history checks can see. (default 24h0m0s)
       --ignore-finding-regex stringArray   Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.
+      --ignore-older-than string           Hide findings whose problem started before this: a duration (24h: unchanged for a day) or an RFC3339 timestamp. Combine with --ignore-younger-than for a time window.
+      --ignore-younger-than string         Hide findings whose problem started more recently than this: a duration (5m: started in the last 5 minutes) or an RFC3339 timestamp. Findings without a start time (e.g. a missing resource request) are always shown.
+      --interval duration                  With --while or --repeat: pause between two runs. (default 15s)
       --kubeconfig string                  Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
+      --name string                        Text for the summary line, to tell several terminals apart.
   -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed.
   -o, --output string                      Output format: text or json. (default "text")
+      --repeat                             Repeat forever (until Ctrl-C).
+      --timeout duration                   Give up after this time, exit code 3. 0: no limit.
       --use-db                             Read condition history for checks from --db.
+      --while string                       Repeat while a health finding matches this regular expression, then exit 0. Only matching findings are shown. '.' waits until there are no health findings.
 ```
 
 ### Options inherited from parent commands

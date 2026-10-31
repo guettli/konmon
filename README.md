@@ -1,6 +1,14 @@
 # konmon: Kubernetes Condition Monitor
 
-konmon watches **all** resources of a Kubernetes cluster (including every CRD), keeps a local copy with history in SQLite, runs **checks written in TypeScript or JavaScript** on every object, and sends alerts to Alertmanager.
+What is wrong in your cluster right now? No install needed, only Go and a kubeconfig:
+
+```console
+go run github.com/guettli/konmon@latest check
+```
+
+It lists all resources once (every CRD included), prints what is unhealthy, and exits with 1 if something is. It is the successor of [check-conditions](https://github.com/guettli/check-conditions): see [coming from check-conditions](docs/usage.md#coming-from-check-conditions).
+
+konmon also watches **all** resources of a Kubernetes cluster (including every CRD), keeps a local copy with history in SQLite, runs **checks written in TypeScript or JavaScript** on every object, and sends alerts to Alertmanager.
 
 The 29 core checks (unhealthy `status.conditions` of any resource, crash-looping or unstartable containers, Services without endpoints, dangling references, and more; ported from [check-conditions](https://github.com/guettli/check-conditions), [k8sgpt](https://github.com/k8sgpt-ai/k8sgpt) and [Popeye](https://github.com/derailed/popeye)) are ordinary check files embedded in the binary. Your own checks work exactly the same way: no recompiling, and a check of yours with the name of a core check replaces it.
 
@@ -34,14 +42,21 @@ Conditions have one big advantage over logs and events: they show the current st
 go install github.com/guettli/konmon@latest
 ```
 
+Or run it without installing: `go run github.com/guettli/konmon@latest <command>`.
+
 Binaries for Linux, macOS and Windows are attached to every [release](https://github.com/guettli/konmon/releases), and every release is pushed as `ghcr.io/guettli/konmon:<version>` (and `:latest`).
 
 ## Quick start
 
 ```console
 # What is wrong in the cluster right now? Health first, hygiene below.
-# Exit code 1: health findings; 2: some resource types could not be listed.
+# Exit code 1: health findings; 2: some resource types could not be listed;
+# 3: konmon could not check.
 konmon check --context prod
+
+# Wait until a condition is gone, or until all is healthy.
+konmon check --while StillProvisioning && music
+konmon check --while . --timeout 15m
 
 # False positives (e.g. conditions of CRDs konmon does not know): fix them
 # interactively; the answers go into a config file.

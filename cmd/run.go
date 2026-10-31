@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/signal"
 	"path"
 	"slices"
@@ -113,12 +114,46 @@ func (k *kubeFlags) register(f *pflag.FlagSet) {
 	f.StringVar(&k.context, "context", "", "Kubeconfig context to use. Default: current context.")
 }
 
-// clients builds the Kubernetes clients.
-func (k *kubeFlags) clients() (*rest.Config, dynamic.Interface, discovery.DiscoveryInterface, error) {
+func (k *kubeFlags) loader() (clientcmd.ClientConfig, *clientcmd.ClientConfigLoadingRules) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	loadingRules.ExplicitPath = k.kubeconfig
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: k.context}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides), loadingRules
+}
+
+// describe says which cluster the flags select, and where the kubeconfig
+// comes from: "https://10.0.0.1:6443 (context \"prod\")" and
+// "/home/me/.kube/config".
+func (k *kubeFlags) describe() (cluster, kubeconfig string) {
+	cc, loadingRules := k.loader()
+	config, err := cc.ClientConfig()
+	if err != nil {
+		return "unknown", "unknown"
+	}
+	cluster = config.Host
+	raw, err := cc.RawConfig()
+	if err != nil || len(raw.Contexts) == 0 {
+		return cluster, "in-cluster config"
+	}
+	name := k.context
+	if name == "" {
+		name = raw.CurrentContext
+	}
+	cluster += fmt.Sprintf(" (context %q)", name)
+	if loadingRules.ExplicitPath != "" {
+		return cluster, loadingRules.ExplicitPath
+	}
+	kubeconfig = strings.Join(loadingRules.GetLoadingPrecedence(), string(os.PathListSeparator))
+	if os.Getenv(clientcmd.RecommendedConfigPathEnvVar) != "" {
+		kubeconfig += " (from $" + clientcmd.RecommendedConfigPathEnvVar + ")"
+	}
+	return cluster, kubeconfig
+}
+
+// clients builds the Kubernetes clients.
+func (k *kubeFlags) clients() (*rest.Config, dynamic.Interface, discovery.DiscoveryInterface, error) {
+	cc, _ := k.loader()
+	config, err := cc.ClientConfig()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("kubeconfig: %w", err)
 	}
