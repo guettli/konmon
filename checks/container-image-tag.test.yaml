@@ -23,3 +23,24 @@ cases:
       metadata: {name: p, namespace: default, ownerReferences: [{uid: x, kind: ReplicaSet, name: r, apiVersion: apps/v1, controller: true}]}
       spec: {containers: [{name: a, image: "nginx"}]}
     expect: []
+
+  - name: pods of an operator's custom resource are reported
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, ownerReferences: [{uid: x, kind: Cluster, name: pg, apiVersion: postgresql.cnpg.io/v1, controller: true}]}
+      spec: {containers: [{name: a, image: "nginx"}]}
+    expect:
+      - {container: a}
+  - name: a Job of a CronJob is reported via the CronJob
+    resource: jobs.batch
+    object:
+      metadata: {name: j, namespace: default, ownerReferences: [{uid: x, kind: CronJob, name: c, apiVersion: batch/v1, controller: true}]}
+      spec: {template: {spec: {containers: [{name: a, image: "nginx"}]}}}
+    expect: []
+  - name: a standalone Job is reported
+    resource: jobs.batch
+    object:
+      metadata: {name: j, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: "nginx"}]}}}
+    expect:
+      - {container: a}

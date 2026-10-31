@@ -5,7 +5,16 @@
 // Ported from Popeye (github.com/derailed/popeye, Apache-2.0),
 // internal/lint/container.go (codes 100, 101), with proper parsing of
 // registry ports.
-import { defineCheck, podSpec, Finding } from "konmon";
+import { defineCheck, podSpec, Finding, KubeObject } from "konmon";
+
+// Pods of a workload, and Jobs of a CronJob, are reported via the
+// workload. Pods of other owners (an operator's custom resource) are
+// reported themselves.
+function reportedViaOwner(obj: KubeObject, resource: string): boolean {
+  const kinds =
+    resource === "pods" ? ["ReplicaSet", "StatefulSet", "DaemonSet", "Job"] : resource === "jobs" ? ["CronJob"] : [];
+  return (obj.metadata.ownerReferences ?? []).some((r) => r.controller && kinds.includes(r.kind));
+}
 
 function tag(image: string): string | undefined {
   if (image.includes("@")) return "@digest";
@@ -19,11 +28,10 @@ export default defineCheck({
   category: "hygiene",
   severity: "info",
   match: {
-    resources: ["pods", "deployments.apps", "statefulsets.apps", "daemonsets.apps", "cronjobs.batch"],
+    resources: ["pods", "deployments.apps", "statefulsets.apps", "daemonsets.apps", "jobs.batch", "cronjobs.batch"],
   },
   check(obj, ctx) {
-    // Pods of a workload are reported via the workload.
-    if (ctx.resource.resource === "pods" && (obj.metadata.ownerReferences ?? []).length > 0) return [];
+    if (reportedViaOwner(obj, ctx.resource.resource)) return [];
     const spec = podSpec(obj, ctx.resource.resource);
     const findings: Finding[] = [];
     for (const c of [...(spec?.initContainers ?? []), ...(spec?.containers ?? [])]) {

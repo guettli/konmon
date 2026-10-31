@@ -42,3 +42,35 @@ cases:
         containerStatuses:
           - {name: app, restartCount: 40, ready: false, state: {waiting: {reason: CrashLoopBackOff}}}
     expect: []
+
+  - name: finished Job Pod after retries
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        phase: Succeeded
+        containerStatuses:
+          - {name: app, restartCount: 6, ready: false, state: {terminated: {exitCode: 0, reason: Completed}}}
+    expect: []
+
+  - name: failed Pod
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        phase: Failed
+        containerStatuses:
+          - {name: app, restartCount: 6, ready: false, state: {terminated: {exitCode: 1, reason: Error}}}
+    expect: []
+
+  - name: init container which completed after retries
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        phase: Running
+        initContainerStatuses:
+          - {name: migrate, restartCount: 5, ready: false, state: {terminated: {exitCode: 0, reason: Completed}}}
+        containerStatuses:
+          - {name: app, restartCount: 0, ready: true, state: {running: {}}}
+    expect: []

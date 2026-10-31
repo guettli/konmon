@@ -34,10 +34,19 @@ cases:
       metadata: {name: db, namespace: default, generation: 3}
       spec: {replicas: 3}
       status: {observedGeneration: 3, readyReplicas: 2, updatedReplicas: 1, currentRevision: db-1, updateRevision: db-2}
-    expect: []
+    expect:
+      - {key: rollout-1, message: "StatefulSet has 2/3 ready replicas, 1 updated", details: {ready: 2, desired: 3}}
   - name: daemonset rolling update
     resource: daemonsets.apps
     object:
       metadata: {name: ds, namespace: default, generation: 2}
       status: {observedGeneration: 2, desiredNumberScheduled: 3, numberReady: 2, updatedNumberScheduled: 2}
+    expect:
+      - {key: rollout-2, message: "DaemonSet has 2/3 ready Pods, 2 updated"}
+  - name: statefulset rollout finished, all ready
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default, generation: 3}
+      spec: {replicas: 3}
+      status: {observedGeneration: 3, readyReplicas: 3, updatedReplicas: 1, currentRevision: db-1, updateRevision: db-2}
     expect: []

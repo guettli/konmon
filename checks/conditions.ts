@@ -296,8 +296,9 @@ export default defineCheck({
     ],
   },
   params: {
-    // A Pod which has not restarted yet may have ContainersReady=False and
-    // Initialized=False for this long while it starts. 0 disables it.
+    // A Pod which has not restarted yet may have Ready=False,
+    // ContainersReady=False and Initialized=False for this long while it
+    // starts. 0 disables it.
     podStartGraceSeconds: 30,
     // Polarity of condition types, from the "conditions" section of the
     // config file: {"widgets.example.com": {"healthyWhenFalse": ["Stalled"]}}.
@@ -341,7 +342,7 @@ export default defineCheck({
         (r) =>
           !(
             r.status === "False" &&
-            (r.type === "ContainersReady" || r.type === "Initialized") &&
+            (r.type === "Ready" || r.type === "ContainersReady" || r.type === "Initialized") &&
             r.since !== undefined &&
             ctx.now.getTime() - r.since.getTime() < grace
           ),
