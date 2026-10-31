@@ -1,7 +1,10 @@
 package checks
 
 import (
+	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,6 +24,8 @@ type Snapshot struct {
 	byType    map[schema.GroupResource][]*unstructured.Unstructured
 	byName    map[nameKey]*unstructured.Unstructured
 	byOwner   map[string][]ownedItem
+	// partial types were only listed in these namespaces.
+	partial map[schema.GroupResource][]string
 }
 
 type nameKey struct {
@@ -79,6 +84,31 @@ func (s *Snapshot) Items() []Item { return s.items }
 func (s *Snapshot) Available(gr schema.GroupResource) bool {
 	_, ok := s.available[gr]
 	return ok
+}
+
+// SetPartial marks a type whose objects were only listed in some
+// namespaces: reading it elsewhere is an error, so an object in another
+// namespace never looks missing.
+func (s *Snapshot) SetPartial(gr schema.GroupResource, namespaces []string) {
+	if s.partial == nil {
+		s.partial = map[schema.GroupResource][]string{}
+	}
+	s.partial[gr] = namespaces
+}
+
+// covers returns an error if the objects of a type in a namespace are not
+// known. all: every namespace.
+func (s *Snapshot) covers(gr schema.GroupResource, namespace string, all bool) error {
+	namespaces, ok := s.partial[gr]
+	if !ok || (!all && slices.Contains(namespaces, namespace)) {
+		return nil
+	}
+	where := "in all namespaces"
+	if !all {
+		where = fmt.Sprintf("in namespace %q", namespace)
+	}
+	return fmt.Errorf("resource %s is only listed in namespace %s (not allowed to list it %s)",
+		FormatResource(gr), strings.Join(namespaces, ", "), where)
 }
 
 func (s *Snapshot) get(gr schema.GroupResource, namespace, name string) *unstructured.Unstructured {

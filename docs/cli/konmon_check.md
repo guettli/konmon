@@ -56,7 +56,7 @@ konmon check [CHECK...] [flags]
       --interval duration                  With --while or --repeat: pause between two runs. (default 15s)
       --kubeconfig string                  Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
       --name string                        Text for the summary line, to tell several terminals apart.
-  -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed.
+  -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed. A type which may not be listed in all namespaces (RBAC) is listed in each of them, if there is no glob pattern.
   -o, --output string                      Output format: text or json. (default "text")
       --repeat                             Repeat forever (until Ctrl-C).
       --retry-count int                    Network errors before the first successful run: retry this often, a second apart. Later runs of --repeat and --while retry forever. 0: retry forever. (default 5)

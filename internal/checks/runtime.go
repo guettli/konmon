@@ -173,6 +173,9 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 		if namespace != nil && !goja.IsUndefined(namespace) && !goja.IsNull(namespace) {
 			ns = namespace.String()
 		}
+		if err := rt.snap.covers(gr, ns, false); err != nil {
+			panic(vm.NewTypeError(err.Error()))
+		}
 		obj := rt.snap.get(gr, ns, name)
 		if obj == nil {
 			return goja.Null()
@@ -181,7 +184,14 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	})
 	rt.set(ctx, "list", func(resource string, opts goja.Value) goja.Value {
 		gr := rt.readable(lc, resource)
-		objs := rt.snap.list(gr, rt.listOptions(opts))
+		o := rt.listOptions(opts)
+		// Owned objects are in the namespace of their owner.
+		if o.owner == "" {
+			if err := rt.snap.covers(gr, o.namespace, !o.hasNamespace); err != nil {
+				panic(vm.NewTypeError(err.Error()))
+			}
+		}
+		objs := rt.snap.list(gr, o)
 		vals := make([]any, 0, len(objs))
 		for _, o := range objs {
 			vals = append(vals, wrap(vm, o.Object))

@@ -80,6 +80,6 @@ konmon contains all checks of [check-conditions](https://github.com/guettli/chec
 Differences:
 
 - `--while` ends only after a run which could list everything: during an API server restart it goes on.
-- `-n` filters the findings; konmon still lists all namespaces, so a check can see objects in other namespaces (a Gateway of an HTTPRoute).
+- `-n` filters the findings; konmon still lists all namespaces, so a check can see objects in other namespaces (a Gateway of an HTTPRoute). If you may only read some namespaces (a Role, no ClusterRole), `konmon check -n my-ns` lists each type which it may not list in all namespaces in `my-ns` only, like check-conditions; then a check which looks into another namespace fails for that object (a `check-error` finding) instead of reporting the object there as missing. This needs namespace names, not glob patterns.
 - A false positive is fixed in a [config file](config.md) (`konmon triage`), not with a regex.
 - konmon has more checks: `konmon checks list`. `konmon check conditions deletion-timestamp pod-container-restarts` runs only the ones of check-conditions.

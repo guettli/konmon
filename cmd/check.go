@@ -41,6 +41,7 @@ func (o *checkOptions) register(f *pflag.FlagSet) {
 	o.kube.register(f)
 	o.checks.register(f)
 	o.filter.register(f)
+	f.Lookup("namespace").Usage += " A type which may not be listed in all namespaces (RBAC) is listed in each of them, if there is no glob pattern."
 	f.BoolVar(&o.useDB, "use-db", false, "Read condition history for checks from --db.")
 	f.DurationVar(&o.historyWindow, "history-window", 24*time.Hour, "How much condition history checks can see.")
 	f.StringVar(&o.ignoreYounger, "ignore-younger-than", "",
@@ -202,7 +203,7 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	if err != nil {
 		return nil, err
 	}
-	w := &watch.Watcher{Dynamic: dyn, Discovery: disc, Include: engine.Watch, Log: log}
+	w := &watch.Watcher{Dynamic: dyn, Discovery: disc, Include: engine.Watch, Log: log, Namespaces: o.filter.plainNamespaces()}
 	warnUnserved(engine, disc, log)
 	listed, err := w.ListOnce(ctx)
 	if err != nil {
@@ -235,7 +236,11 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 		}
 	}
 
-	res, err := engine.Evaluate(ctx, checks.NewSnapshot(snapItems, listed.Available), hist, now)
+	snap := checks.NewSnapshot(snapItems, listed.Available)
+	for _, gvr := range listed.PerNamespace {
+		snap.SetPartial(gvr.GroupResource(), w.Namespaces)
+	}
+	res, err := engine.Evaluate(ctx, snap, hist, now)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +301,8 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 		cluster, kubeconfig := checkOpts.kube.describe()
 		_, _ = fmt.Fprintf(out, "Cluster:    %s\nKubeconfig: %s\n\n", cluster, kubeconfig)
 	}
-	once := func(ctx context.Context) (bool, error) { return checkOnce(ctx, cmd, only, while) }
+	var notes checkNotes
+	once := func(ctx context.Context) (bool, error) { return checkOnce(ctx, cmd, only, while, &notes) }
 	var err error
 	if while == nil && !l.repeat {
 		err = retryCheck(runCtx, cmd.ErrOrStderr(), l.retries, time.Second, once)
@@ -385,10 +391,16 @@ func repeatCheck(ctx context.Context, msg io.Writer, interval time.Duration, whi
 	}
 }
 
+// checkNotes are the notes about the listing which were printed: in a
+// loop they are printed again only when they change.
+type checkNotes struct {
+	notAllowed, perNamespace string
+}
+
 // checkOnce lists the cluster, runs the checks and prints the findings.
 // With while, only health findings matching it are shown, and matched
 // reports whether there was one.
-func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *regexp.Regexp) (matched bool, err error) {
+func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *regexp.Regexp, notes *checkNotes) (matched bool, err error) {
 	start := time.Now()
 	run, err := runChecks(ctx, &checkOpts, only)
 	if err != nil {
@@ -412,6 +424,10 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	for _, gvr := range forbidden {
 		notAllowed = append(notAllowed, checks.FormatResource(gvr.GroupResource()))
 	}
+	perNamespace := make([]string, 0, len(listed.PerNamespace))
+	for _, gvr := range listed.PerNamespace {
+		perNamespace = append(perNamespace, checks.FormatResource(gvr.GroupResource()))
+	}
 	notChecked := make([]string, 0, len(listed.Failed))
 	for _, err := range listed.Failed {
 		notChecked = append(notChecked, err.Error())
@@ -422,7 +438,7 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	out := cmd.OutOrStdout()
 	if checkOpts.filter.output == "json" {
 		result := checkResult{
-			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked,
+			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked, PerNamespace: perNamespace,
 			Objects: res.Objects, Types: len(available), Checks: len(engine.Checks()), DurationMS: took.Milliseconds(),
 			Ignored: ignored,
 		}
@@ -434,14 +450,21 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		}
 		sortJSONFindings(result.Findings)
 		slices.Sort(result.NotAllowed)
+		slices.Sort(result.PerNamespace)
 		if err := writeJSON(out, result); err != nil {
 			return false, err
 		}
 	} else {
 		var hygiene int
 		health, hygiene = printFindingLines(out, shown)
-		if len(notAllowed) > 0 {
-			_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", joinSorted(notAllowed))
+		if s := joinSorted(notAllowed); s != notes.notAllowed {
+			_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", s)
+			notes.notAllowed = s
+		}
+		if s := joinSorted(perNamespace); s != notes.perNamespace {
+			_, _ = fmt.Fprintf(out, "Not allowed to list in all namespaces, listed in %s only: %s\n",
+				strings.Join(checkOpts.filter.namespaces, ", "), s)
+			notes.perNamespace = s
 		}
 		for _, s := range notChecked {
 			_, _ = fmt.Fprintf(out, "Not checked: %s\n", s)
@@ -493,6 +516,9 @@ type checkResult struct {
 	Findings []jsonFinding `json:"findings"`
 	// NotAllowed are the resource types RBAC does not allow to list.
 	NotAllowed []string `json:"notAllowed"`
+	// PerNamespace types may not be listed in all namespaces; they were
+	// listed in the namespaces of --namespace.
+	PerNamespace []string `json:"perNamespace,omitempty"`
 	// NotChecked are errors of resource types or API groups which could
 	// not be listed.
 	NotChecked []string `json:"notChecked"`

@@ -2,10 +2,12 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,7 +18,10 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-var jobsGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+var (
+	jobsGVR     = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	cronJobsGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
+)
 
 func newJob(name, uid string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
@@ -139,5 +144,52 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	w.informers[widgets] = &running{gvr: widgets.WithVersion("v2"), synced: make(chan struct{}), started: time.Now()}
 	if !w.Synced() {
 		t.Error("a new informer blocks Synced after the first sync")
+	}
+}
+
+func TestListOnceListsPerNamespaceWhenAllNamespacesIsForbidden(t *testing.T) {
+	other := newJob("x", "uid-x")
+	other.SetNamespace("other")
+	scheme := runtime.NewScheme()
+	dyn := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{jobsGVR: "JobList", cronJobsGVR: "CronJobList"}, newJob("a", "uid-a"), other)
+	// RBAC of a user of namespace ns: jobs may be listed there only,
+	// cronjobs not at all.
+	dyn.PrependReactor("list", "*", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetResource().Resource == "jobs" && a.GetNamespace() == "ns" {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("RBAC"))
+	})
+	disc := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	disc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "batch/v1",
+		APIResources: []metav1.APIResource{
+			{Name: "jobs", Namespaced: true, Kind: "Job", Verbs: []string{"get", "list", "watch"}},
+			{Name: "cronjobs", Namespaced: true, Kind: "CronJob", Verbs: []string{"get", "list", "watch"}},
+		},
+	}}
+	w := &Watcher{Dynamic: dyn, Discovery: disc, Log: slog.New(slog.DiscardHandler)}
+	res, err := w.ListOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 0 || len(res.Forbidden) != 2 {
+		t.Errorf("without Namespaces: %d items, forbidden %v", len(res.Items), res.Forbidden)
+	}
+
+	w.Namespaces = []string{"ns"}
+	res, err = w.ListOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Obj.GetName() != "a" {
+		t.Errorf("items %v", res.Items)
+	}
+	if len(res.PerNamespace) != 1 || res.PerNamespace[0] != jobsGVR || len(res.Available) != 1 {
+		t.Errorf("per namespace %v, available %v", res.PerNamespace, res.Available)
+	}
+	if len(res.Forbidden) != 1 || res.Forbidden[0] != cronJobsGVR {
+		t.Errorf("forbidden %v", res.Forbidden)
 	}
 }
