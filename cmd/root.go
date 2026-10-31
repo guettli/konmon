@@ -47,12 +47,17 @@ False positives: 'konmon triage' fixes them in your config file, and
 
 // Execute runs the root command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	cmd, err := rootCmd.ExecuteC()
+	if err != nil {
 		var exit exitError
 		if errors.As(err, &exit) {
 			os.Exit(int(exit))
 		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
+		if cmd == checkCmd {
+			// 1 means health findings there.
+			os.Exit(int(errCheckFailed))
+		}
 		os.Exit(1)
 	}
 }

@@ -120,6 +120,11 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 			stop()
 			return err
 		}
+		notBefore, notAfter, err := triageOpts.ageWindow(now)
+		if err != nil {
+			stop()
+			return err
+		}
 		ignore, err := triageOpts.checks.ignorer()
 		if err != nil {
 			stop()
@@ -142,7 +147,7 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 				continue
 			}
 			universe = append(universe, f)
-			if triageOpts.filter.match(f) {
+			if triageOpts.filter.match(f) && inAgeWindow(f, notBefore, notAfter) {
 				findings = append(findings, f)
 			}
 		}
