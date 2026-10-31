@@ -484,8 +484,14 @@ func (tx *Tx) SyncFindings(current []checks.Finding, keep func(*FindingRow) bool
 			continue
 		}
 		if keep != nil && keep(&r) {
-			// The check failed for this object: it did not say the
-			// finding is gone.
+			// The check failed for this object (or its objects are not
+			// known): it did not say the finding is gone. It is still
+			// believed open, so last_seen moves on.
+			if _, err := tx.tx.ExecContext(tx.ctx,
+				"UPDATE findings SET last_seen = ? WHERE id = ?", ms(now), r.ID); err != nil {
+				return nil, nil, fmt.Errorf("update finding %s: %w", r.Key, err)
+			}
+			r.LastSeen = now
 			open = append(open, r)
 			continue
 		}
@@ -564,9 +570,10 @@ func (s *Store) FindingsAt(ctx context.Context, t time.Time) ([]FindingRow, erro
 	return scanFindings(rows)
 }
 
-// ResolvedSince returns findings resolved after t.
+// ResolvedSince returns findings resolved at or after t: with
+// --resend-resolved 0, a finding resolved now is still sent once.
 func (s *Store) ResolvedSince(ctx context.Context, t time.Time) ([]FindingRow, error) {
-	rows, err := s.db.QueryContext(ctx, findingSelect+" WHERE resolved_at > ? ORDER BY resolved_at, id", ms(t))
+	rows, err := s.db.QueryContext(ctx, findingSelect+" WHERE resolved_at >= ? ORDER BY resolved_at, id", ms(t))
 	if err != nil {
 		return nil, fmt.Errorf("read resolved findings: %w", err)
 	}

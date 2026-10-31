@@ -44,6 +44,14 @@ func (d *Definition) Matches(gr schema.GroupResource) bool {
 	return d.match.contains(gr) && !d.exclude.contains(gr) && !Denied(gr)
 }
 
+// DependsOn reports whether the findings of the check may depend on the
+// objects of this type: it reads them, or matches a fixed set of types
+// which includes it (such a check may list them). A check which matches
+// all types ("*") depends only on the object it runs on.
+func (d *Definition) DependsOn(gr schema.GroupResource) bool {
+	return d.reads.contains(gr) || (!d.match.all && d.match.contains(gr))
+}
+
 // canRead reports whether the check may read objects of this type with
 // ctx.get and ctx.list.
 func (d *Definition) canRead(gr schema.GroupResource) bool {

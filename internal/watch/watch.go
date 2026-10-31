@@ -57,6 +57,10 @@ type Watcher struct {
 	// Events receives Upsert, Delete and Synced values.
 	Events chan<- any
 	Log    *slog.Logger
+	// SyncTimeout: Synced does not wait longer for an informer whose
+	// initial list fails (e.g. a broken conversion webhook). Default 2m,
+	// to stay within the startup probe of a Pod (5m in gitops).
+	SyncTimeout time.Duration
 
 	mu        sync.Mutex
 	informers map[schema.GroupResource]*running
@@ -64,6 +68,9 @@ type Watcher struct {
 	// discovered: a refresh went through all resource types. Before that,
 	// informers holds only the types started so far.
 	discovered bool
+	// ready: Synced returned true once. A type started later (a new CRD,
+	// a new preferred version) does not block evaluations: see Pending.
+	ready bool
 }
 
 type running struct {
@@ -71,6 +78,16 @@ type running struct {
 	informer cache.SharedIndexInformer
 	cancel   context.CancelFunc
 	synced   chan struct{}
+	started  time.Time
+}
+
+func (r *running) isSynced() bool {
+	select {
+	case <-r.synced:
+		return true
+	default:
+		return false
+	}
 }
 
 // Run discovers resource types and keeps the informers in line with them,
@@ -80,6 +97,7 @@ func (w *Watcher) Run(ctx context.Context, refresh time.Duration) error {
 	w.informers = map[schema.GroupResource]*running{}
 	w.forbidden = map[schema.GroupResource]struct{}{}
 	w.discovered = false
+	w.ready = false
 	w.mu.Unlock()
 
 	ticker := time.NewTicker(refresh)
@@ -108,21 +126,62 @@ func (w *Watcher) Run(ctx context.Context, refresh time.Duration) error {
 }
 
 // Synced reports whether discovery went through all resource types and all
-// informers have finished their initial list.
+// informers have finished their initial list, or have tried for longer than
+// SyncTimeout. Once true, it stays true: the objects of types which are not
+// synced are missing from Snapshot, and Pending lists these types.
 func (w *Watcher) Synced() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.ready {
+		return true
+	}
 	if !w.discovered || len(w.informers) == 0 {
 		return false
 	}
+	timeout := w.syncTimeout()
+	var late []string
 	for _, r := range w.informers {
-		select {
-		case <-r.synced:
-		default:
+		if r.isSynced() {
+			continue
+		}
+		if time.Since(r.started) < timeout {
 			return false
 		}
+		late = append(late, r.gvr.String())
 	}
+	if len(late) > 0 {
+		w.Log.Warn("resource types are not synced, evaluating without them", "resources", late, "timeout", timeout)
+	}
+	w.ready = true
 	return true
+}
+
+func (w *Watcher) syncTimeout() time.Duration {
+	if w.SyncTimeout <= 0 {
+		return 2 * time.Minute
+	}
+	return w.SyncTimeout
+}
+
+// PendingType is a watched type whose informer has not finished its
+// initial list. Stuck: it has tried for longer than SyncTimeout.
+type PendingType struct {
+	schema.GroupResource
+	Stuck bool
+}
+
+// Pending returns the watched types whose informers have not finished their
+// initial list.
+func (w *Watcher) Pending() []PendingType {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var result []PendingType
+	for gr, r := range w.informers {
+		if !r.isSynced() {
+			result = append(result, PendingType{GroupResource: gr, Stuck: time.Since(r.started) >= w.syncTimeout()})
+		}
+	}
+	return result
 }
 
 // Snapshot returns all objects of all synced informers.
@@ -136,9 +195,7 @@ func (w *Watcher) Snapshot() []Item {
 
 	var items []Item
 	for _, r := range rs {
-		select {
-		case <-r.synced:
-		default:
+		if !r.isSynced() {
 			continue
 		}
 		for _, o := range r.informer.GetStore().List() {
@@ -156,10 +213,8 @@ func (w *Watcher) Available() []schema.GroupVersionResource {
 	defer w.mu.Unlock()
 	result := make([]schema.GroupVersionResource, 0, len(w.informers))
 	for _, r := range w.informers {
-		select {
-		case <-r.synced:
+		if r.isSynced() {
 			result = append(result, r.gvr)
-		default:
 		}
 	}
 	return result
@@ -263,14 +318,18 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		}
 		w.Log.Info("stop watching", "resource", r.gvr.String())
 		r.cancel()
-		delete(w.informers, gr)
-		if !ok {
-			gone = append(gone, r.gvr)
+		if ok {
+			// A new preferred version: pending until start replaces it,
+			// so its objects are not taken for gone in between.
+			w.informers[gr] = &running{gvr: gvr, cancel: func() {}, synced: make(chan struct{}), started: time.Now()}
+			continue
 		}
+		delete(w.informers, gr)
+		gone = append(gone, r.gvr)
 	}
 	var toStart []schema.GroupVersionResource
 	for gr, gvr := range wanted {
-		if _, ok := w.informers[gr]; !ok {
+		if r, ok := w.informers[gr]; !ok || r.informer == nil {
 			toStart = append(toStart, gvr)
 		}
 	}
@@ -290,6 +349,9 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		}
 		if err := w.probe(ctx, gvr); err != nil {
 			w.mu.Lock()
+			if r, ok := w.informers[gvr.GroupResource()]; ok && r.informer == nil {
+				delete(w.informers, gvr.GroupResource()) // the placeholder of a version change
+			}
 			_, known := w.forbidden[gvr.GroupResource()]
 			w.forbidden[gvr.GroupResource()] = struct{}{}
 			w.mu.Unlock()
@@ -407,7 +469,7 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 		cancel()
 		return
 	}
-	r := &running{gvr: gvr, informer: informer, cancel: cancel, synced: make(chan struct{})}
+	r := &running{gvr: gvr, informer: informer, cancel: cancel, synced: make(chan struct{}), started: time.Now()}
 	w.mu.Lock()
 	w.informers[gvr.GroupResource()] = r
 	delete(w.forbidden, gvr.GroupResource())
