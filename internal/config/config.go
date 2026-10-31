@@ -194,9 +194,6 @@ func (r *IgnoreRule) Compile() error {
 	if matchesAll {
 		return errors.New("a rule needs at least one of check, resource, namespace, name, condition, container, key, message, other than \"*\"")
 	}
-	if r.Check == checks.ErrorCheck && strings.Trim(r.Key, "*") == "" {
-		return errors.New("a rule for check-error needs key: the name of the failing check")
-	}
 	if strings.TrimSpace(r.Comment) == "" {
 		return errors.New("comment is required: say why these findings are fine")
 	}
@@ -229,7 +226,9 @@ func (r *IgnoreRule) Match(f *checks.Finding, now time.Time) bool {
 	if r.Expired(now) {
 		return false
 	}
-	if f.Check == checks.ErrorCheck && r.Check != checks.ErrorCheck {
+	if f.Check == checks.ErrorCheck && (r.Check != checks.ErrorCheck || strings.Trim(r.Key, "*") == "") {
+		// Only a rule with the name of the failing check hides it. Triage
+		// up to v0.0.14 wrote rules without the key.
 		return false
 	}
 	resource := ""

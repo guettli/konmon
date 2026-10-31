@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"encoding/json"
 	"sort"
 
 	"github.com/dop251/goja"
@@ -72,23 +73,20 @@ func (a *roArray) Set(int, goja.Value) bool { return false }
 
 func (a *roArray) SetLen(int) bool { return false }
 
-// unwrap replaces the read-only wrappers in an exported value with the
-// objects they wrap: a check may return parts of an object, e.g.
-// details: {labels: pod.metadata.labels}.
+// unwrap returns the object or array a read-only wrapper holds: a check may
+// return parts of an object, e.g. details: pod.metadata.labels. Not
+// recursive: an exported value may contain cycles. Deeper wrappers are
+// formatted by MarshalJSON.
 func unwrap(v any) any {
 	switch t := v.(type) {
 	case *roObject:
 		return t.m
 	case *roArray:
 		return t.a
-	case map[string]any:
-		for k, e := range t {
-			t[k] = unwrap(e)
-		}
-	case []any:
-		for i, e := range t {
-			t[i] = unwrap(e)
-		}
 	}
 	return v
 }
+
+func (o *roObject) MarshalJSON() ([]byte, error) { return json.Marshal(o.m) }
+
+func (a *roArray) MarshalJSON() ([]byte, error) { return json.Marshal(a.a) }

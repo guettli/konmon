@@ -135,8 +135,26 @@ export default defineCheck({
 	if got := res.Findings[0].Details["name"]; got != "a" {
 		t.Errorf("details from an object: %v", res.Findings[0].Details)
 	}
-	if got := res.Findings[1].Details["first"]; got != "map[status:False type:Zeta]" {
+	if got := res.Findings[1].Details["first"]; got != `{"status":"False","type":"Zeta"}` {
 		t.Errorf("a nested object: %q", got)
+	}
+}
+
+func TestCyclicFindingsDoNotCrash(t *testing.T) {
+	e := load(t, `
+export default {
+  name: "cycle",
+  match: { resources: ["pods"] },
+  check() {
+    const f: any = { message: "m", details: {} };
+    f.self = f;
+    f.details.self = f.details;
+    return [f];
+  },
+};`)
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 1 || !strings.Contains(res.Failures[0].Err.Error(), "details.self") {
+		t.Errorf("want a failure for the cyclic details, got %+v", res.Failures)
 	}
 }
 

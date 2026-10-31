@@ -40,6 +40,8 @@ ignore:
   - check: gateway-references-missing
     key: backend/*
     comment: backends are created later
+  - check: check-error
+    comment: written by an old triage
 `), "konmon.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +66,7 @@ ignore:
 		{&checks.Finding{Check: checks.ErrorCheck, Key: "x"}, now, 2},
 		{&checks.Finding{Check: "gateway-references-missing", Key: "backend/d/svc:80"}, now, 3}, // "*" matches "/"
 		{&checks.Finding{Check: "gateway-references-missing", Key: "parent/d/gw"}, now, -1},
+		{&checks.Finding{Check: checks.ErrorCheck, Key: "y"}, now, -1}, // a check-error rule needs the key
 	}
 	for i, c := range cases {
 		got := -1
@@ -88,17 +91,16 @@ ignore:
 
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
-		"unknown field":     "ignore:\n  - chek: conditions\n    comment: x\n",
-		"no matcher":        "ignore:\n  - comment: everything\n",
-		"no comment":        "ignore:\n  - check: conditions\n",
-		"bad glob":          "ignore:\n  - name: '['\n    comment: x\n",
-		"bad regexp":        "ignore:\n  - message: '('\n    comment: x\n",
-		"bad until":         "ignore:\n  - check: x\n    until: tomorrow\n    comment: x\n",
-		"empty rule":        "ignore:\n  -\n",
-		"unknown section":   "ignores: []\n",
-		"only stars":        "ignore:\n  - check: '*'\n    namespace: '**'\n    comment: x\n",
-		"every check-error": "ignore:\n  - check: check-error\n    comment: x\n",
-		"two documents":     "ignore:\n  - check: a\n    comment: x\n---\nignore:\n  - check: b\n    comment: y\n",
+		"unknown field":   "ignore:\n  - chek: conditions\n    comment: x\n",
+		"no matcher":      "ignore:\n  - comment: everything\n",
+		"no comment":      "ignore:\n  - check: conditions\n",
+		"bad glob":        "ignore:\n  - name: '['\n    comment: x\n",
+		"bad regexp":      "ignore:\n  - message: '('\n    comment: x\n",
+		"bad until":       "ignore:\n  - check: x\n    until: tomorrow\n    comment: x\n",
+		"empty rule":      "ignore:\n  -\n",
+		"unknown section": "ignores: []\n",
+		"only stars":      "ignore:\n  - check: '*'\n    namespace: '**'\n    comment: x\n",
+		"two documents":   "ignore:\n  - check: a\n    comment: x\n---\nignore:\n  - check: b\n    comment: y\n",
 	}
 	for name, data := range cases {
 		if _, err := Parse([]byte(data), "c.yaml"); err == nil {

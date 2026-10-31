@@ -197,6 +197,9 @@ func (g *triageGroup) category() string { return g.findings[0].Category }
 
 func (g *triageGroup) title() string {
 	s := g.check + "  " + g.resource
+	if g.check == checks.ErrorCheck {
+		s += g.findings[0].Key // the failing check
+	}
 	if g.condition != "" {
 		s += "  " + g.condition
 		if g.status != "" {
