@@ -26,7 +26,7 @@ func widget(namespace, condition, message string) *checks.Finding {
 func TestParseAndMatch(t *testing.T) {
 	cfg, err := Parse([]byte(`
 ignore:
-  - resource: widgets.example.com
+  - resource: Widgets.example.com # case does not matter
     namespace: team-*
     condition: Stalled
     message: "Waiting for .*"

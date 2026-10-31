@@ -115,7 +115,7 @@ func Parse(data []byte, name string) (*Config, error) {
 	for key, r := range cfg.Conditions {
 		resource := "*"
 		if key != "*" {
-			gr, err := checks.ParseResource(strings.ToLower(key))
+			gr, err := checks.ParseResource(key)
 			if err != nil {
 				return nil, fmt.Errorf("%s: conditions: %w", name, err)
 			}
@@ -175,6 +175,7 @@ func (r *ConditionRules) validate() error {
 // Compile checks the rule and prepares it for Match. Parse calls it; call
 // it for a rule which is built in code.
 func (r *IgnoreRule) Compile() error {
+	r.Resource = strings.ToLower(r.Resource) // resource names are lowercase
 	globs := map[string]string{
 		"check": r.Check, "resource": r.Resource, "namespace": r.Namespace, "name": r.Name,
 		"condition": r.Condition, "container": r.Container, "key": r.Key,

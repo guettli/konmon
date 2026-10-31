@@ -502,3 +502,16 @@ export default { name: "evil", match: { resources: ["pods"] }, check() { return 
 		t.Errorf("want 4 findings, got %+v", res.Findings)
 	}
 }
+
+func TestParseResourceIgnoresCase(t *testing.T) {
+	gr, err := ParseResource(" Deployments.Apps ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (schema.GroupResource{Group: "apps", Resource: "deployments"}); gr != want {
+		t.Errorf("got %v, want %v", gr, want)
+	}
+	if gr, _ := ParseResource("Secrets"); !Denied(gr) {
+		t.Error("Secrets must be denied")
+	}
+}

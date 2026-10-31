@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type fakeEvaluations struct {
@@ -74,5 +76,22 @@ func TestMetrics(t *testing.T) {
 func TestLabelValue(t *testing.T) {
 	if got, want := labelValue("a\\b\"c\nd"), `a\\b\"c\nd`; got != want {
 		t.Errorf("labelValue = %s, want %s", got, want)
+	}
+}
+
+func TestGlobMatcherIgnoresCase(t *testing.T) {
+	match, err := globMatcher([]string{"Leases.*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !match(schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}) {
+		t.Error("Leases.* must match leases.coordination.k8s.io")
+	}
+}
+
+func TestSplitResourceNameIgnoresCase(t *testing.T) {
+	resource, group, name, err := splitResourceName("Deployments.Apps/My-App")
+	if err != nil || resource != "deployments" || group != "apps" || name != "My-App" {
+		t.Errorf("got %q %q %q %v", resource, group, name, err)
 	}
 }

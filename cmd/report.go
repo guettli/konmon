@@ -47,7 +47,7 @@ var reportFalsePositiveCmd = &cobra.Command{
 		if o.check == "" || o.resource == "" {
 			return errors.New("--check and --resource are required")
 		}
-		printReport(cmd.OutOrStdout(), falsePositiveURL(o.check, o.resource, o.condition, o.status, o.reason, o.rule), o.open)
+		printReport(cmd.OutOrStdout(), falsePositiveURL(o.check, strings.ToLower(strings.TrimSpace(o.resource)), o.condition, o.status, o.reason, o.rule), o.open)
 		return nil
 	},
 }

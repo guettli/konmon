@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/guettli/konmon/internal/checks"
 )
 
 // Editor adds rules to a config file and keeps its comments and order.
@@ -110,14 +112,23 @@ const (
 
 // Teach adds condition types to the polarity of a resource type
 // (resource.group or "*"). list is HealthyWhenTrue, HealthyWhenFalse or
-// IgnoreTypes. A type which is already in another list is moved.
-func (e *Editor) Teach(resource, list string, types []string) error {
+// IgnoreTypes. A type which is already in another list is moved. It returns
+// the key in conditions, which keeps the case of an existing key.
+func (e *Editor) Teach(resource, list string, types []string) (string, error) {
 	if !slices.Contains([]string{HealthyWhenTrue, HealthyWhenFalse, IgnoreTypes}, list) {
-		return fmt.Errorf("unknown polarity %q", list)
+		return "", fmt.Errorf("unknown polarity %q", list)
 	}
-	rules := value(value(e.root, "conditions", yaml.MappingNode), resource, yaml.MappingNode)
+	conditions := value(e.root, "conditions", yaml.MappingNode)
+	if conditions.Kind != yaml.MappingNode {
+		return "", errors.New("conditions is not a mapping")
+	}
+	resource, err := conditionsKey(conditions, resource)
+	if err != nil {
+		return "", err
+	}
+	rules := value(conditions, resource, yaml.MappingNode)
 	if rules.Kind != yaml.MappingNode {
-		return fmt.Errorf("conditions %s is not a mapping", resource)
+		return "", fmt.Errorf("conditions %s is not a mapping", resource)
 	}
 	for _, other := range []string{HealthyWhenTrue, HealthyWhenFalse, IgnoreTypes} {
 		if other == list {
@@ -148,7 +159,34 @@ func (e *Editor) Teach(resource, list string, types []string) error {
 			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: t})
 		}
 	}
-	return nil
+	return resource, nil
+}
+
+// conditionsKey returns the key in conditions which means the same resource
+// type as resource, for example "Deployments.Apps" for "deployments.apps",
+// or resource if there is none.
+func conditionsKey(conditions *yaml.Node, resource string) (string, error) {
+	want, err := normalizeResource(resource)
+	if err != nil {
+		return "", err
+	}
+	for i := 0; i+1 < len(conditions.Content); i += 2 {
+		if key, err := normalizeResource(conditions.Content[i].Value); err == nil && key == want {
+			return conditions.Content[i].Value, nil
+		}
+	}
+	return want, nil
+}
+
+func normalizeResource(s string) (string, error) {
+	if s == "*" {
+		return s, nil
+	}
+	gr, err := checks.ParseResource(s)
+	if err != nil {
+		return "", err
+	}
+	return checks.FormatResource(gr), nil
 }
 
 // Bytes returns the file content.
