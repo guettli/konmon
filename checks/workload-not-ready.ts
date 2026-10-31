@@ -6,7 +6,11 @@
 //
 // During a rollout the number of updated Pods is part of the key: each
 // step of a progressing rollout starts the 10 minutes again, a rollout
-// which is stuck (a new revision which crash-loops) is reported.
+// which is stuck (a new revision which crash-loops) is reported. The
+// price: a fired alert resolves when a rollout starts or takes a step
+// (e.g. the fix is applied), and fires again after 10 minutes if the
+// workload stays unready; a Pod which needs more than 10 minutes to get
+// ready is reported on each step.
 //
 // Ported from k8sgpt (github.com/k8sgpt-ai/k8sgpt, Apache-2.0),
 // pkg/analyzer/statefulset.go and daemonset.go.

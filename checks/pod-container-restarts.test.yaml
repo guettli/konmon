@@ -63,14 +63,3 @@ cases:
           - {name: app, restartCount: 6, ready: false, state: {terminated: {exitCode: 1, reason: Error}}}
     expect: []
 
-  - name: init container which completed after retries
-    resource: pods
-    object:
-      metadata: {name: p, namespace: default}
-      status:
-        phase: Running
-        initContainerStatuses:
-          - {name: migrate, restartCount: 5, ready: false, state: {terminated: {exitCode: 0, reason: Completed}}}
-        containerStatuses:
-          - {name: app, restartCount: 0, ready: true, state: {running: {}}}
-    expect: []

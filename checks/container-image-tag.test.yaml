@@ -44,3 +44,16 @@ cases:
       spec: {template: {spec: {containers: [{name: a, image: "nginx"}]}}}
     expect:
       - {container: a}
+  - name: a ReplicaSet of a Deployment is reported via the Deployment
+    resource: replicasets.apps
+    object:
+      metadata: {name: rs, namespace: default, ownerReferences: [{uid: x, kind: Deployment, name: d, apiVersion: apps/v1, controller: true}]}
+      spec: {template: {spec: {containers: [{name: a, image: "nginx"}]}}}
+    expect: []
+  - name: a ReplicaSet of an Argo Rollout is reported
+    resource: replicasets.apps
+    object:
+      metadata: {name: rs, namespace: default, ownerReferences: [{uid: x, kind: Rollout, name: r, apiVersion: argoproj.io/v1alpha1, controller: true}]}
+      spec: {template: {spec: {containers: [{name: a, image: "nginx"}]}}}
+    expect:
+      - {container: a}

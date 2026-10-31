@@ -7,13 +7,17 @@
 // registry ports.
 import { defineCheck, podSpec, Finding, KubeObject } from "konmon";
 
-// Pods of a workload, and Jobs of a CronJob, are reported via the
-// workload. Pods of other owners (an operator's custom resource) are
-// reported themselves.
+// Pods of a workload, ReplicaSets of a Deployment and Jobs of a CronJob
+// are reported via the workload. Objects of other owners (an operator's
+// custom resource, an Argo Rollout, a static Pod's Node) are reported
+// themselves.
 function reportedViaOwner(obj: KubeObject, resource: string): boolean {
-  const kinds =
-    resource === "pods" ? ["ReplicaSet", "StatefulSet", "DaemonSet", "Job"] : resource === "jobs" ? ["CronJob"] : [];
-  return (obj.metadata.ownerReferences ?? []).some((r) => r.controller && kinds.includes(r.kind));
+  const kinds: Record<string, string[]> = {
+    pods: ["ReplicaSet", "StatefulSet", "DaemonSet", "Job"],
+    replicasets: ["Deployment"],
+    jobs: ["CronJob"],
+  };
+  return (obj.metadata.ownerReferences ?? []).some((r) => r.controller && (kinds[resource] ?? []).includes(r.kind));
 }
 
 function tag(image: string): string | undefined {
@@ -28,7 +32,15 @@ export default defineCheck({
   category: "hygiene",
   severity: "info",
   match: {
-    resources: ["pods", "deployments.apps", "statefulsets.apps", "daemonsets.apps", "jobs.batch", "cronjobs.batch"],
+    resources: [
+      "pods",
+      "deployments.apps",
+      "statefulsets.apps",
+      "daemonsets.apps",
+      "replicasets.apps",
+      "jobs.batch",
+      "cronjobs.batch",
+    ],
   },
   check(obj, ctx) {
     if (reportedViaOwner(obj, ctx.resource.resource)) return [];
