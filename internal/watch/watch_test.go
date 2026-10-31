@@ -132,7 +132,7 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	if !w.Synced() {
 		t.Error("one broken resource type blocks Synced forever")
 	}
-	if p := w.Pending(); len(p) != 1 || p[0] != widgets {
+	if p := w.Pending(); len(p) != 1 || p[0].GroupResource != widgets || !p[0].Stuck {
 		t.Errorf("Pending() = %v", p)
 	}
 	// A type started later does not block evaluations again.

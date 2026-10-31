@@ -138,10 +138,7 @@ func (w *Watcher) Synced() bool {
 	if !w.discovered || len(w.informers) == 0 {
 		return false
 	}
-	timeout := w.SyncTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Minute
-	}
+	timeout := w.syncTimeout()
 	var late []string
 	for _, r := range w.informers {
 		if r.isSynced() {
@@ -159,15 +156,29 @@ func (w *Watcher) Synced() bool {
 	return true
 }
 
+func (w *Watcher) syncTimeout() time.Duration {
+	if w.SyncTimeout <= 0 {
+		return 2 * time.Minute
+	}
+	return w.SyncTimeout
+}
+
+// PendingType is a watched type whose informer has not finished its
+// initial list. Stuck: it has tried for longer than SyncTimeout.
+type PendingType struct {
+	schema.GroupResource
+	Stuck bool
+}
+
 // Pending returns the watched types whose informers have not finished their
 // initial list.
-func (w *Watcher) Pending() []schema.GroupResource {
+func (w *Watcher) Pending() []PendingType {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var result []schema.GroupResource
+	var result []PendingType
 	for gr, r := range w.informers {
 		if !r.isSynced() {
-			result = append(result, gr)
+			result = append(result, PendingType{GroupResource: gr, Stuck: time.Since(r.started) >= w.syncTimeout()})
 		}
 	}
 	return result

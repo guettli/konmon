@@ -484,8 +484,14 @@ func (tx *Tx) SyncFindings(current []checks.Finding, keep func(*FindingRow) bool
 			continue
 		}
 		if keep != nil && keep(&r) {
-			// The check failed for this object: it did not say the
-			// finding is gone.
+			// The check failed for this object (or its objects are not
+			// known): it did not say the finding is gone. It is still
+			// believed open, so last_seen moves on.
+			if _, err := tx.tx.ExecContext(tx.ctx,
+				"UPDATE findings SET last_seen = ? WHERE id = ?", ms(now), r.ID); err != nil {
+				return nil, nil, fmt.Errorf("update finding %s: %w", r.Key, err)
+			}
+			r.LastSeen = now
 			open = append(open, r)
 			continue
 		}

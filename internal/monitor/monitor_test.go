@@ -24,11 +24,11 @@ var (
 type fakeSource struct {
 	synced  bool
 	items   []watch.Item
-	pending []schema.GroupResource
+	pending []watch.PendingType
 	extra   []schema.GroupVersionResource // available besides jobs
 }
 
-func (f *fakeSource) Pending() []schema.GroupResource { return f.pending }
+func (f *fakeSource) Pending() []watch.PendingType { return f.pending }
 
 func (f *fakeSource) Synced() bool           { return f.synced }
 func (f *fakeSource) Snapshot() []watch.Item { return f.items }
@@ -261,7 +261,7 @@ func TestFiringAlertsStayWhileTheSourceIsNotSyncedOrPending(t *testing.T) {
 
 	// The informer of jobs is replaced (a new preferred version): its
 	// objects are missing, the finding stays open.
-	src.items, src.pending = nil, []schema.GroupResource{jobsGVR.GroupResource()}
+	src.items, src.pending = nil, []watch.PendingType{{GroupResource: jobsGVR.GroupResource(), Stuck: true}}
 	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestFindingsOfChecksWhichReadAPendingTypeStay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The services informer is replaced: not available, pending.
-	src.extra, src.pending = nil, []schema.GroupResource{services.GroupResource()}
+	src.extra, src.pending = nil, []watch.PendingType{{GroupResource: services.GroupResource()}}
 	if err := m.Evaluate(ctx, t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -319,6 +319,18 @@ func TestFindingsOfChecksWhichReadAPendingTypeStay(t *testing.T) {
 	}
 	if !found {
 		t.Error("the finding of a check which reads a pending type resolved")
+	}
+	// Stuck: the check reports what it can without the type.
+	src.pending[0].Stuck = true
+	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ = st.FindingsAt(ctx, t0.Add(2*time.Minute)); len(open) != 0 {
+		for _, r := range open {
+			if r.Finding.Check == "needs-services" && r.ResolvedAt.IsZero() {
+				t.Error("findings of a check which reads a stuck type are frozen")
+			}
+		}
 	}
 }
 

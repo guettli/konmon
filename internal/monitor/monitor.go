@@ -29,7 +29,7 @@ type Source interface {
 	// Available returns the types whose objects are fully known.
 	Available() []schema.GroupVersionResource
 	// Pending returns the watched types whose objects are not known yet.
-	Pending() []schema.GroupResource
+	Pending() []watch.PendingType
 }
 
 // Notifier receives the state of all findings after each evaluation.
@@ -327,14 +327,18 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		// Alertmanager would resolve them.
 		return m.notifyOpen(ctx, now, 4*m.cfg.EvalInterval)
 	}
-	// Objects of pending types are missing: findings of these types, and
-	// of checks which read them, keep their state.
+	// Objects of pending types are missing: findings of these types keep
+	// their state, and those of checks which read them, unless the type is
+	// stuck (then these checks report what they can without it).
 	pending := map[schema.GroupResource]struct{}{}
 	pendingChecks := map[string]struct{}{}
-	for _, gr := range m.source.Pending() {
-		pending[gr] = struct{}{}
+	for _, p := range m.source.Pending() {
+		pending[p.GroupResource] = struct{}{}
+		if p.Stuck {
+			continue
+		}
 		for _, d := range m.cfg.Checks.Checks() {
-			if d.DependsOn(gr) {
+			if d.DependsOn(p.GroupResource) {
 				pendingChecks[d.Name] = struct{}{}
 			}
 		}
