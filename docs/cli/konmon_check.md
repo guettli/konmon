@@ -59,6 +59,7 @@ konmon check [CHECK...] [flags]
   -n, --namespace strings                  Only show findings of objects in these namespaces (cluster-scoped objects are left out; failing checks are always shown). Comma-separated, glob patterns allowed.
   -o, --output string                      Output format: text or json. (default "text")
       --repeat                             Repeat forever (until Ctrl-C).
+      --retry-count int                    Network errors before the first successful run: retry this often, a second apart. Later runs of --repeat and --while retry forever. 0: retry forever. (default 5)
       --timeout duration                   Give up after this time, exit code 3. 0: no limit.
       --use-db                             Read condition history for checks from --db.
       --while string                       Repeat while a health finding matches this regular expression, then exit 0. Only matching findings are shown. '.' waits until there are no health findings.

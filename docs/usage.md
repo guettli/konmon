@@ -69,16 +69,17 @@ konmon contains all checks of [check-conditions](https://github.com/guettli/chec
 | `--pod-start-grace 1m` | `--check-param conditions.podStartGraceSeconds=60` |
 | `--pod-restart-warn-count 20` | `--check-param pod-container-restarts.restarts=20` (0: `--disable-check pod-container-restarts`) |
 | `--warn-deletion-older-than 1h` | `--check-param deletion-timestamp.olderThanSeconds=3600` (0: `--disable-check deletion-timestamp`) |
-| `--ignore-condition-regex 'pods X=False Y .*'` | `--ignore-finding-regex 'conditions pods \S+ Condition X=False Y'`, or better a rule in the [config file](config.md) |
+| `--ignore-condition-regex 'pods X=False Y .*'` | `--ignore-finding-regex 'conditions pods \S+ Condition (\S+/)?X(/\S+)?=False Y'`, or better a rule in the [config file](config.md) |
 | `--ignore-condition-younger-than`, `--ignore-condition-older-than` | `--ignore-younger-than`, `--ignore-older-than` (all findings with a start time, not only conditions) |
-| `--retry-count` | network errors are retried with `--repeat` and `--while` |
+| `--retry-count 5` | `--retry-count 5`: network errors before the first successful run; later runs of `--repeat` and `--while` retry forever |
 | `-v/--verbose` | `--log-level debug` |
 | `logs` | not ported: use `kubectl logs` |
 
-`--ignore-finding-regex` is matched against `check resource namespace/name message`, for example `conditions pods default/web-1 Condition Ready=False PodFailed "…"`.
+`--ignore-finding-regex` is matched against `check resource namespace/name message`, for example `conditions pods default/web-1 Condition Ready=False PodFailed "…"`. Condition types with the same status, reason and message are one finding (`Condition Failed/FailureTarget=True …`), so a regex for one type has to allow the others, and it hides the whole finding. `--while` tries each type on its own too, so `--while Failed=True` matches that finding. The age of a finding of several types is the age of the oldest.
 
 Differences:
 
+- `--while` ends only after a run which could list everything: during an API server restart it goes on.
 - `-n` filters the findings; konmon still lists all namespaces, so a check can see objects in other namespaces (a Gateway of an HTTPRoute).
 - A false positive is fixed in a [config file](config.md) (`konmon triage`), not with a regex.
 - konmon has more checks: `konmon checks list`. `konmon check conditions deletion-timestamp pod-container-restarts` runs only the ones of check-conditions.

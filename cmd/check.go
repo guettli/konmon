@@ -10,11 +10,13 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/checks"
@@ -50,6 +52,11 @@ func (o *checkOptions) register(f *pflag.FlagSet) {
 // ageWindow returns the start times outside of which findings are hidden.
 // Zero: no limit.
 func (o *checkOptions) ageWindow(now time.Time) (notBefore, notAfter time.Time, err error) {
+	for _, s := range []string{o.ignoreOlder, o.ignoreYounger} {
+		if strings.HasPrefix(s, "-") {
+			return notBefore, notAfter, fmt.Errorf("%q: the duration must be positive", s)
+		}
+	}
 	if notBefore, err = parseTime(o.ignoreOlder, now); err != nil {
 		return notBefore, notAfter, fmt.Errorf("--ignore-older-than: %w", err)
 	}
@@ -81,6 +88,7 @@ type checkLoop struct {
 	interval time.Duration
 	timeout  time.Duration
 	name     string
+	retries  int
 }
 
 func (l *checkLoop) register(f *pflag.FlagSet) {
@@ -90,6 +98,8 @@ func (l *checkLoop) register(f *pflag.FlagSet) {
 	f.DurationVar(&l.interval, "interval", 15*time.Second, "With --while or --repeat: pause between two runs.")
 	f.DurationVar(&l.timeout, "timeout", 0, "Give up after this time, exit code 3. 0: no limit.")
 	f.StringVar(&l.name, "name", "", "Text for the summary line, to tell several terminals apart.")
+	f.IntVar(&l.retries, "retry-count", 5,
+		"Network errors before the first successful run: retry this often, a second apart. Later runs of --repeat and --while retry forever. 0: retry forever.")
 }
 
 var checkLoopOpts checkLoop
@@ -261,6 +271,12 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	if l.interval <= 0 {
 		return errors.New("--interval must be positive")
 	}
+	if l.retries < 0 {
+		return errors.New("--retry-count must not be negative")
+	}
+	if while != nil && len(checkOpts.filter.categories) > 0 && !slices.Contains(checkOpts.filter.categories, checks.CategoryHealth) {
+		return errors.New("--while only matches health findings: --category must include health")
+	}
 	if err := checkOpts.filter.validate(); err != nil {
 		return err
 	}
@@ -283,9 +299,17 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	once := func(ctx context.Context) (bool, error) { return checkOnce(ctx, cmd, only, while) }
 	var err error
 	if while == nil && !l.repeat {
-		_, err = once(runCtx)
+		err = retryCheck(runCtx, cmd.ErrOrStderr(), l.retries, time.Second, once)
 	} else {
-		err = repeatCheck(runCtx, cmd.ErrOrStderr(), l.interval, while != nil, once)
+		err = repeatCheck(runCtx, cmd.ErrOrStderr(), l.interval, while != nil, func(ctx context.Context) (bool, error) {
+			var matched bool
+			err := retryCheck(ctx, cmd.ErrOrStderr(), l.retries, time.Second, func(ctx context.Context) (bool, error) {
+				var err error
+				matched, err = once(ctx)
+				return matched, err
+			})
+			return matched, err
+		})
 	}
 	switch {
 	case ctx.Err() != nil:
@@ -296,26 +320,56 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	return err
 }
 
+// retryCheck calls once, and again on network errors, up to retries times
+// (0: forever).
+func retryCheck(ctx context.Context, msg io.Writer, retries int, pause time.Duration, once func(context.Context) (bool, error)) error {
+	for i := 1; ; i++ {
+		_, err := once(ctx)
+		if err == nil || !transient(err) || ctx.Err() != nil || (retries > 0 && i > retries) {
+			return err
+		}
+		_, _ = fmt.Fprintf(msg, "Error: %v. Trying again (%d).\n", err, i)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pause):
+		}
+	}
+}
+
+// transient reports whether an error may go away by itself: the network,
+// or an API server which restarts.
+func transient(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
+		apierrors.IsTooManyRequests(err)
+}
+
 // repeatCheck calls once until it reports no match (with while) or ctx
-// ends. Network errors are printed and retried, other errors only after a
-// successful run: a wrong flag ends it at once.
+// ends. After a successful run errors are printed and it goes on; before,
+// they end it: a wrong flag at once. A run which could not list
+// everything never ends --while: what it waits for may be in the rest.
 func repeatCheck(ctx context.Context, msg io.Writer, interval time.Duration, while bool, once func(context.Context) (bool, error)) error {
 	start := time.Now()
 	succeeded := false
 	for {
 		matched, err := once(ctx)
-		if errors.Is(err, errFindings) || errors.Is(err, errIncomplete) {
+		incomplete := errors.Is(err, errIncomplete)
+		if errors.Is(err, errFindings) || incomplete {
 			err = nil
 		}
 		switch {
 		case ctx.Err() != nil:
 			return ctx.Err()
 		case err != nil:
-			var netErr net.Error
-			if !succeeded && !errors.As(err, &netErr) {
+			if !succeeded {
 				return err
 			}
 			_, _ = fmt.Fprintf(msg, "Error: %v. Trying again.\n", err)
+		case while && incomplete:
+			succeeded = true
+			_, _ = fmt.Fprintln(msg, "Not everything could be listed, so --while goes on.")
 		case while && !matched:
 			_, _ = fmt.Fprintln(msg, "No health finding matches --while. Done.")
 			return nil
@@ -347,7 +401,7 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	for _, f := range run.findings {
 		line := f.Line(now)
 		if while != nil {
-			if f.Category != checks.CategoryHealth || !while.MatchString(line) {
+			if f.Category != checks.CategoryHealth || !slices.ContainsFunc(whileLines(f, line), while.MatchString) {
 				continue
 			}
 			matched = true
@@ -416,6 +470,22 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		return matched, errIncomplete
 	}
 	return matched, nil
+}
+
+// whileLines are the texts --while is matched against: the line, and for
+// grouped condition types (Failed/FailureTarget=True) the line of each
+// type, so that "Failed=True" matches, like in check-conditions.
+func whileLines(f *checks.Finding, line string) []string {
+	lines := []string{line}
+	types := strings.Split(f.Condition, "/")
+	if len(types) < 2 {
+		return lines
+	}
+	merged := "Condition " + f.Condition + "="
+	for _, t := range types {
+		lines = append(lines, strings.Replace(line, merged, "Condition "+t+"=", 1))
+	}
+	return lines
 }
 
 // checkResult is the output of `check -o json`.

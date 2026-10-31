@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,9 +24,9 @@ func TestRepeatCheckWhile(t *testing.T) {
 		case 1:
 			return true, errFindings // still matching
 		case 2:
-			return false, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+			return false, errors.New("list pods: unexpected error") // retried after a successful run
 		case 3:
-			return false, errors.New("list pods: the server is currently unable to handle the request") // retried after a successful run
+			return false, errIncomplete // nothing matches, but not everything was listed
 		case 4:
 			return true, nil
 		}
@@ -32,8 +35,10 @@ func TestRepeatCheckWhile(t *testing.T) {
 	if err != nil || runs != 5 {
 		t.Fatalf("err %v after %d runs", err, runs)
 	}
-	if got := strings.Count(msg.String(), "Trying again"); got != 2 {
-		t.Errorf("%d retries in:\n%s", got, msg.String())
+	for _, want := range []string{"Trying again", "Not everything could be listed"} {
+		if !strings.Contains(msg.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, msg.String())
+		}
 	}
 }
 
@@ -48,18 +53,42 @@ func TestRepeatCheckStopsOnAnErrorBeforeTheFirstRun(t *testing.T) {
 	}
 }
 
-func TestRepeatCheckNetworkErrorsAreRetriedFromTheStart(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	runs := 0
-	err := repeatCheck(ctx, &bytes.Buffer{}, time.Millisecond, false, func(context.Context) (bool, error) {
-		runs++
-		if runs == 3 {
-			cancel()
+func TestRetryCheck(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	bad := errors.New("bad flag")
+	for _, c := range []struct {
+		name     string
+		retries  int
+		errs     []error
+		wantRuns int
+		wantErr  error
+	}{
+		{"network error, then ok", 5, []error{refused, io.ErrUnexpectedEOF, nil}, 3, nil},
+		{"gives up", 2, []error{refused, refused, refused, nil}, 3, refused},
+		{"findings are no error to retry", 5, []error{errFindings}, 1, errFindings},
+		{"other errors end it", 5, []error{bad, nil}, 1, bad},
+		{"0 retries forever", 0, []error{refused, refused, refused, refused, refused, refused, refused, nil}, 8, nil},
+	} {
+		runs := 0
+		err := retryCheck(context.Background(), &bytes.Buffer{}, c.retries, time.Millisecond, func(context.Context) (bool, error) {
+			runs++
+			return false, c.errs[runs-1]
+		})
+		if runs != c.wantRuns || (c.wantErr != nil && !errors.Is(err, c.wantErr)) || (c.wantErr == nil && runs == len(c.errs) && err != nil) {
+			t.Errorf("%s: err %v after %d runs", c.name, err, runs)
 		}
-		return false, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
-	})
-	if !errors.Is(err, context.Canceled) || runs != 3 {
-		t.Errorf("err %v after %d runs", err, runs)
+	}
+}
+
+func TestWhileLinesMatchEachConditionType(t *testing.T) {
+	f := &checks.Finding{Check: "conditions", Condition: "Failed/FailureTarget"}
+	line := `  ns jobs j Condition Failed/FailureTarget=True BackoffLimitExceeded "Job has reached the specified backoff limit" [conditions]`
+	re := regexp.MustCompile(`Failed=True`)
+	if !slices.ContainsFunc(whileLines(f, line), re.MatchString) {
+		t.Errorf("Failed=True does not match %v", whileLines(f, line))
+	}
+	if got := whileLines(&checks.Finding{Condition: "Ready"}, "x"); len(got) != 1 {
+		t.Errorf("one condition type: %v", got)
 	}
 }
 
@@ -84,7 +113,9 @@ func TestAgeWindow(t *testing.T) {
 			t.Errorf("%s since %s: %v", c.f.Check, c.f.Since, got)
 		}
 	}
-	if _, _, err := (&checkOptions{ignoreOlder: "yesterday"}).ageWindow(now); err == nil {
-		t.Error("want an error")
+	for _, bad := range []checkOptions{{ignoreOlder: "yesterday"}, {ignoreYounger: "-5m"}} {
+		if _, _, err := bad.ageWindow(now); err == nil {
+			t.Errorf("want an error for %+v", bad)
+		}
 	}
 }
