@@ -4,6 +4,7 @@ package watch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -233,9 +234,13 @@ type ListResult struct {
 	// Failed lists types (or API groups) which could not be listed or
 	// discovered for other reasons.
 	Failed []error
-	// PerNamespace types are in Available, but their objects were only
-	// listed in Watcher.Namespaces: listing all namespaces is forbidden.
-	PerNamespace []schema.GroupVersionResource
+	// PerNamespace types are in Available, but listing them in all
+	// namespaces is forbidden: their objects were only listed in these
+	// namespaces of Watcher.Namespaces.
+	PerNamespace map[schema.GroupVersionResource][]string
+	// ForbiddenIn are the namespaces of Watcher.Namespaces in which these
+	// PerNamespace types may not be listed.
+	ForbiddenIn map[string][]schema.GroupVersionResource
 }
 
 // ListOnce lists all objects of all included types once, without
@@ -250,11 +255,13 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 		res.Failed = append(res.Failed, partialErr)
 	}
 	type result struct {
-		gvr          schema.GroupVersionResource
-		items        []Item
-		forbidden    bool
-		perNamespace bool
-		err          error
+		gvr       schema.GroupVersionResource
+		items     []Item
+		forbidden bool
+		// listedIn and forbiddenIn: per namespace, after listing all
+		// namespaces was forbidden.
+		listedIn, forbiddenIn []string
+		err                   error
 	}
 	results := make([]result, len(gvrs))
 	g, gctx := errgroup.WithContext(ctx)
@@ -265,13 +272,21 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 			var err error
 			r.items, err = w.list(gctx, gvr, metav1.NamespaceAll)
 			if apierrors.IsForbidden(err) && namespaced[gvr] && len(w.Namespaces) > 0 {
-				r.items, r.perNamespace = nil, true
+				r.items = nil
 				for _, ns := range w.Namespaces {
-					var items []Item
-					if items, err = w.list(gctx, gvr, ns); err != nil {
+					items, nsErr := w.list(gctx, gvr, ns)
+					if apierrors.IsForbidden(nsErr) {
+						r.forbiddenIn = append(r.forbiddenIn, ns)
+						continue
+					}
+					if err = nsErr; err != nil {
 						break
 					}
 					r.items = append(r.items, items...)
+					r.listedIn = append(r.listedIn, ns)
+				}
+				if err == nil && len(r.listedIn) == 0 {
+					err = apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("in all namespaces of --namespace"))
 				}
 			}
 			switch {
@@ -299,8 +314,15 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 		default:
 			res.Items = append(res.Items, r.items...)
 			res.Available = append(res.Available, r.gvr)
-			if r.perNamespace {
-				res.PerNamespace = append(res.PerNamespace, r.gvr)
+			if len(r.listedIn) > 0 {
+				if res.PerNamespace == nil {
+					res.PerNamespace = map[schema.GroupVersionResource][]string{}
+					res.ForbiddenIn = map[string][]schema.GroupVersionResource{}
+				}
+				res.PerNamespace[r.gvr] = r.listedIn
+				for _, ns := range r.forbiddenIn {
+					res.ForbiddenIn[ns] = append(res.ForbiddenIn[ns], r.gvr)
+				}
 			}
 		}
 	}

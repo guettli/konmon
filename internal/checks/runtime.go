@@ -43,6 +43,9 @@ type jsRuntime struct {
 	snap    *Snapshot
 	hist    History
 	current *loadedCheck
+	// uncovered: the current call read objects which are not known (see
+	// mustCover).
+	uncovered bool
 	// Saved before any check code runs: a check may replace the globals.
 	freezeFn goja.Callable
 	dateCtor *goja.Object
@@ -173,9 +176,7 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 		if namespace != nil && !goja.IsUndefined(namespace) && !goja.IsNull(namespace) {
 			ns = namespace.String()
 		}
-		if err := rt.snap.covers(gr, ns, false); err != nil {
-			panic(vm.NewTypeError(err.Error()))
-		}
+		rt.mustCover(gr, ns, false)
 		obj := rt.snap.get(gr, ns, name)
 		if obj == nil {
 			return goja.Null()
@@ -185,11 +186,11 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	rt.set(ctx, "list", func(resource string, opts goja.Value) goja.Value {
 		gr := rt.readable(lc, resource)
 		o := rt.listOptions(opts)
-		// Owned objects are in the namespace of their owner.
-		if o.owner == "" {
-			if err := rt.snap.covers(gr, o.namespace, !o.hasNamespace); err != nil {
-				panic(vm.NewTypeError(err.Error()))
-			}
+		if o.ownerNamespace != "" && !o.hasNamespace {
+			// Owned objects are in the namespace of their owner.
+			rt.mustCover(gr, o.ownerNamespace, false)
+		} else {
+			rt.mustCover(gr, o.namespace, !o.hasNamespace)
 		}
 		objs := rt.snap.list(gr, o)
 		vals := make([]any, 0, len(objs))
@@ -257,6 +258,15 @@ func (rt *jsRuntime) resource(lc *loadedCheck, resource string) schema.GroupReso
 	return gr
 }
 
+// mustCover throws if the objects of a type in a namespace (all: in all
+// namespaces) are not known, and marks the call as uncovered.
+func (rt *jsRuntime) mustCover(gr schema.GroupResource, namespace string, all bool) {
+	if err := rt.snap.covers(gr, namespace, all); err != nil {
+		rt.uncovered = true
+		panic(rt.vm.NewTypeError(err.Error()))
+	}
+}
+
 // readable resolves a resource name and makes sure its objects are known.
 // A type which is not watched must not look like a type without objects.
 func (rt *jsRuntime) readable(lc *loadedCheck, resource string) schema.GroupResource {
@@ -286,6 +296,13 @@ func (rt *jsRuntime) listOptions(v goja.Value) listOptions {
 	}
 	if owner := obj.Get("owner"); owner != nil && !goja.IsUndefined(owner) && !goja.IsNull(owner) {
 		o.owner = uidOf(rt.vm, owner)
+		if s, ok := owner.Export().(string); !ok || s == "" {
+			if md := owner.ToObject(rt.vm).Get("metadata"); md != nil && !goja.IsUndefined(md) {
+				if ns := md.ToObject(rt.vm).Get("namespace"); ns != nil && !goja.IsUndefined(ns) && !goja.IsNull(ns) {
+					o.ownerNamespace = ns.String()
+				}
+			}
+		}
 	}
 	return o
 }
@@ -320,12 +337,14 @@ func (rt *jsRuntime) run(t task) taskResult {
 	rt.freeze(resource)
 	for _, d := range t.defs {
 		lc := rt.byName[d.Name]
+		rt.uncovered = false
 		findings, err := rt.call(lc, obj, resource, t.item)
 		res.calls++
 		if err != nil {
 			uid := string(t.item.Obj.GetUID())
 			res.failures = append(res.failures, Failure{
 				Check: d.Name, UID: uid, Object: t.item.Obj.GetNamespace() + "/" + t.item.Obj.GetName(), Err: err,
+				Uncovered: rt.uncovered,
 			})
 			continue
 		}
@@ -473,6 +492,9 @@ func newFinding(d *Definition, item Item) Finding {
 func errorFindings(defs []*Definition, failures []Failure) []Finding {
 	byCheck := map[string][]Failure{}
 	for _, f := range failures {
+		if f.Uncovered {
+			continue
+		}
 		byCheck[f.Check] = append(byCheck[f.Check], f)
 	}
 	var findings []Finding

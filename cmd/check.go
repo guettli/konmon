@@ -176,6 +176,9 @@ type checkRun struct {
 	// findings pass the filter and are not ignored.
 	findings []*checks.Finding
 	ignored  int
+	// uncovered: per check, the objects in --namespace it could not check
+	// because it reads a type in a namespace which could not be listed.
+	uncovered []string
 }
 
 // runChecks lists the cluster and runs the checks, like 'konmon check'.
@@ -237,8 +240,8 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	}
 
 	snap := checks.NewSnapshot(snapItems, listed.Available)
-	for _, gvr := range listed.PerNamespace {
-		snap.SetPartial(gvr.GroupResource(), w.Namespaces)
+	for gvr, namespaces := range listed.PerNamespace {
+		snap.SetPartial(gvr.GroupResource(), namespaces)
 	}
 	res, err := engine.Evaluate(ctx, snap, hist, now)
 	if err != nil {
@@ -249,7 +252,10 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	if err != nil {
 		return nil, err
 	}
-	run := &checkRun{engine: engine, ignore: ignore, listed: listed, result: res, available: len(listed.Available), now: now}
+	run := &checkRun{
+		engine: engine, ignore: ignore, listed: listed, result: res, available: len(listed.Available), now: now,
+		uncovered: uncoveredNotes(res.Failures, o.filter.namespaces),
+	}
 	for i := range res.Findings {
 		f := &res.Findings[i]
 		if !o.filter.match(f) || !inAgeWindow(f, notBefore, notAfter) {
@@ -391,10 +397,47 @@ func repeatCheck(ctx context.Context, msg io.Writer, interval time.Duration, whi
 	}
 }
 
+// uncoveredNotes describes the failures of checks which read a type in
+// a namespace whose objects could not be listed, for objects in
+// namespaces (outside of them nothing is shown anyway).
+func uncoveredNotes(failures []checks.Failure, namespaces []string) []string {
+	byCheck := map[string][]checks.Failure{}
+	var order []string
+	for _, f := range failures {
+		ns, _, _ := strings.Cut(f.Object, "/")
+		if !f.Uncovered || (len(namespaces) > 0 && !slices.Contains(namespaces, ns)) {
+			continue
+		}
+		if byCheck[f.Check] == nil {
+			order = append(order, f.Check)
+		}
+		byCheck[f.Check] = append(byCheck[f.Check], f)
+	}
+	notes := make([]string, 0, len(order))
+	for _, c := range order {
+		fs := byCheck[c]
+		notes = append(notes, fmt.Sprintf("check %s for %s, e.g. %s: %v", c, plural(len(fs), "object"), fs[0].Object, fs[0].Err))
+	}
+	slices.Sort(notes)
+	return notes
+}
+
 // checkNotes are the notes about the listing which were printed: in a
 // loop they are printed again only when they change.
 type checkNotes struct {
-	notAllowed, perNamespace string
+	printed map[string]bool
+}
+
+// print prints the notes which were not printed by the last run.
+func (n *checkNotes) print(w io.Writer, notes []string) {
+	printed := make(map[string]bool, len(notes))
+	for _, s := range notes {
+		if !n.printed[s] {
+			_, _ = fmt.Fprintln(w, s)
+		}
+		printed[s] = true
+	}
+	n.printed = printed
 }
 
 // checkOnce lists the cluster, runs the checks and prints the findings.
@@ -424,9 +467,21 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	for _, gvr := range forbidden {
 		notAllowed = append(notAllowed, checks.FormatResource(gvr.GroupResource()))
 	}
-	perNamespace := make([]string, 0, len(listed.PerNamespace))
-	for _, gvr := range listed.PerNamespace {
-		perNamespace = append(perNamespace, checks.FormatResource(gvr.GroupResource()))
+	// perNamespace: types by the namespaces they were listed in.
+	perNamespace := map[string][]string{}
+	jsonPerNamespace := map[string][]string{}
+	for gvr, namespaces := range listed.PerNamespace {
+		r := checks.FormatResource(gvr.GroupResource())
+		k := strings.Join(namespaces, ", ")
+		perNamespace[k] = append(perNamespace[k], r)
+		jsonPerNamespace[r] = namespaces
+	}
+	forbiddenIn := map[string][]string{}
+	for ns, gvrs := range listed.ForbiddenIn {
+		for _, gvr := range gvrs {
+			forbiddenIn[ns] = append(forbiddenIn[ns], checks.FormatResource(gvr.GroupResource()))
+		}
+		slices.Sort(forbiddenIn[ns])
 	}
 	notChecked := make([]string, 0, len(listed.Failed))
 	for _, err := range listed.Failed {
@@ -438,7 +493,8 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	out := cmd.OutOrStdout()
 	if checkOpts.filter.output == "json" {
 		result := checkResult{
-			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked, PerNamespace: perNamespace,
+			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked,
+			PerNamespace: jsonPerNamespace, ForbiddenIn: forbiddenIn, NotCovered: append([]string{}, run.uncovered...),
 			Objects: res.Objects, Types: len(available), Checks: len(engine.Checks()), DurationMS: took.Milliseconds(),
 			Ignored: ignored,
 		}
@@ -450,22 +506,27 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		}
 		sortJSONFindings(result.Findings)
 		slices.Sort(result.NotAllowed)
-		slices.Sort(result.PerNamespace)
 		if err := writeJSON(out, result); err != nil {
 			return false, err
 		}
 	} else {
 		var hygiene int
 		health, hygiene = printFindingLines(out, shown)
-		if s := joinSorted(notAllowed); s != notes.notAllowed {
-			_, _ = fmt.Fprintf(out, "Not allowed to list: %s\n", s)
-			notes.notAllowed = s
+		var lines []string
+		if len(notAllowed) > 0 {
+			lines = append(lines, "Not allowed to list: "+joinSorted(notAllowed))
 		}
-		if s := joinSorted(perNamespace); s != notes.perNamespace {
-			_, _ = fmt.Fprintf(out, "Not allowed to list in all namespaces, listed in %s only: %s\n",
-				strings.Join(checkOpts.filter.namespaces, ", "), s)
-			notes.perNamespace = s
+		for namespaces, types := range perNamespace {
+			lines = append(lines, fmt.Sprintf("Not allowed to list in all namespaces, listed in %s only: %s", namespaces, joinSorted(types)))
 		}
+		for ns, types := range forbiddenIn {
+			lines = append(lines, fmt.Sprintf("Not allowed to list in namespace %s: %s", ns, strings.Join(types, ", ")))
+		}
+		for _, s := range run.uncovered {
+			lines = append(lines, "Not checked (not allowed to list): "+s)
+		}
+		slices.Sort(lines)
+		notes.print(out, lines)
 		for _, s := range notChecked {
 			_, _ = fmt.Fprintf(out, "Not checked: %s\n", s)
 		}
@@ -516,9 +577,15 @@ type checkResult struct {
 	Findings []jsonFinding `json:"findings"`
 	// NotAllowed are the resource types RBAC does not allow to list.
 	NotAllowed []string `json:"notAllowed"`
-	// PerNamespace types may not be listed in all namespaces; they were
-	// listed in the namespaces of --namespace.
-	PerNamespace []string `json:"perNamespace,omitempty"`
+	// PerNamespace: types which may not be listed in all namespaces, and
+	// the namespaces of --namespace they were listed in.
+	PerNamespace map[string][]string `json:"perNamespace"`
+	// ForbiddenIn: namespaces of --namespace in which these types (of
+	// PerNamespace) may not be listed.
+	ForbiddenIn map[string][]string `json:"forbiddenIn"`
+	// NotCovered: checks which could not check objects because they read
+	// a type in a namespace which could not be listed.
+	NotCovered []string `json:"notCovered"`
 	// NotChecked are errors of resource types or API groups which could
 	// not be listed.
 	NotChecked []string `json:"notChecked"`

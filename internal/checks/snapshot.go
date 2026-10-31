@@ -120,6 +120,9 @@ type listOptions struct {
 	hasNamespace bool
 	labels       map[string]string
 	owner        string
+	// ownerNamespace: of an owner given as object; "" for a cluster-scoped
+	// owner or a UID.
+	ownerNamespace string
 }
 
 func (s *Snapshot) list(gr schema.GroupResource, o listOptions) []*unstructured.Unstructured {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -186,10 +187,23 @@ func TestListOnceListsPerNamespaceWhenAllNamespacesIsForbidden(t *testing.T) {
 	if len(res.Items) != 1 || res.Items[0].Obj.GetName() != "a" {
 		t.Errorf("items %v", res.Items)
 	}
-	if len(res.PerNamespace) != 1 || res.PerNamespace[0] != jobsGVR || len(res.Available) != 1 {
+	if len(res.PerNamespace) != 1 || !slices.Equal(res.PerNamespace[jobsGVR], []string{"ns"}) || len(res.Available) != 1 {
 		t.Errorf("per namespace %v, available %v", res.PerNamespace, res.Available)
 	}
 	if len(res.Forbidden) != 1 || res.Forbidden[0] != cronJobsGVR {
 		t.Errorf("forbidden %v", res.Forbidden)
+	}
+
+	// A namespace which may not be read (or a typo) keeps the others.
+	w.Namespaces = []string{"typo", "ns"}
+	res, err = w.ListOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 1 || !slices.Equal(res.PerNamespace[jobsGVR], []string{"ns"}) {
+		t.Errorf("items %v, per namespace %v", res.Items, res.PerNamespace)
+	}
+	if got := res.ForbiddenIn["typo"]; len(got) != 1 || got[0] != jobsGVR {
+		t.Errorf("forbidden in %v", res.ForbiddenIn)
 	}
 }

@@ -119,3 +119,38 @@ func TestAgeWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckNotesArePrintedWhenTheyChange(t *testing.T) {
+	var n checkNotes
+	var out bytes.Buffer
+	n.print(&out, []string{"a", "b"})
+	n.print(&out, []string{"a", "b"})
+	n.print(&out, nil)
+	n.print(&out, []string{"b"})
+	if got := out.String(); got != "a\nb\nb\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestUncoveredNotes(t *testing.T) {
+	failures := []checks.Failure{
+		{Check: "gateway-references-missing", Object: "app/r1", Err: errors.New("resource gateways only listed"), Uncovered: true},
+		{Check: "gateway-references-missing", Object: "app/r2", Err: errors.New("resource gateways only listed"), Uncovered: true},
+		{Check: "gateway-references-missing", Object: "other/r3", Err: errors.New("x"), Uncovered: true}, // outside -n
+		{Check: "conditions", Object: "app/p", Err: errors.New("boom")},                                  // a real failure
+	}
+	got := uncoveredNotes(failures, []string{"app"})
+	want := []string{"check gateway-references-missing for 2 objects, e.g. app/r1: resource gateways only listed"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestPlainNamespaces(t *testing.T) {
+	if got := (&findingFilter{namespaces: []string{"a", "b", "a"}}).plainNamespaces(); !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("got %v", got)
+	}
+	if got := (&findingFilter{namespaces: []string{"a", "team-*"}}).plainNamespaces(); got != nil {
+		t.Errorf("glob: got %v", got)
+	}
+}

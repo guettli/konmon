@@ -52,7 +52,13 @@ func (o *findingFilter) plainNamespaces() []string {
 	if slices.ContainsFunc(o.namespaces, func(p string) bool { return strings.ContainsAny(p, `*?[\`) }) {
 		return nil
 	}
-	return o.namespaces
+	var namespaces []string
+	for _, ns := range o.namespaces {
+		if !slices.Contains(namespaces, ns) {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	return namespaces
 }
 
 func (o *findingFilter) match(f *checks.Finding) bool {
