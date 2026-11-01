@@ -585,11 +585,14 @@ export default defineCheck({
       case "caught":
         try { ctx.get("services", "default", "s"); } catch (e) {}
         throw new Error("a bug");
+      case "caught-ok":
+        try { ctx.get("services", "default", "s"); } catch (e) {}
+        return [];
     }
     return [];
   },
 });`)
-	snap := NewSnapshot([]Item{pod("has"), pod("get"), pod("other"), pod("caught")}, []schema.GroupVersionResource{podsGVR})
+	snap := NewSnapshot([]Item{pod("has"), pod("get"), pod("other"), pod("caught"), pod("caught-ok")}, []schema.GroupVersionResource{podsGVR})
 	snap.SetPending(servicesGVR.GroupResource())
 	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -611,7 +614,11 @@ export default defineCheck({
 	if f := failed["default/caught"]; f.Uncovered || !strings.Contains(f.Err.Error(), "a bug") {
 		t.Errorf("caught: %+v", f)
 	}
-	if len(failed) != 3 {
+	// Caught and returned normally: the previous findings are kept.
+	if f := failed["default/caught-ok"]; !f.Uncovered || f.Err == nil {
+		t.Errorf("caught-ok: %+v", f)
+	}
+	if len(failed) != 4 {
 		t.Errorf("failures: %v", failed)
 	}
 	got := map[string]bool{}

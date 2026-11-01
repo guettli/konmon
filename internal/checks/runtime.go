@@ -47,8 +47,8 @@ type jsRuntime struct {
 	// which are not known (see mustCover); a failure is uncovered only if
 	// the call ended with it, not if the check caught it.
 	uncovered *goja.Object
-	// pendingHas: the current call asked ctx.has about a pending type, and
-	// got false (see mustNotBePending).
+	// pendingHas: the current call asked ctx.has about a pending type and
+	// got false, or caught the error of reading one.
 	pendingHas error
 	// Saved before any check code runs: a check may replace the globals.
 	freezeFn goja.Callable
@@ -280,6 +280,9 @@ func (rt *jsRuntime) mustCover(gr schema.GroupResource, namespace string, all bo
 // marks the call as uncovered: "no objects" would be the wrong answer.
 func (rt *jsRuntime) mustNotBePending(gr schema.GroupResource) {
 	if err := rt.snap.pendingErr(gr); err != nil {
+		// If the check catches it and returns normally, its findings are
+		// kept like after ctx.has of a pending type.
+		rt.pendingHas = err
 		rt.throwUncovered(err)
 	}
 }
