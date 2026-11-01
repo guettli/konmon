@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	watchapi "k8s.io/apimachinery/pkg/watch"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -104,6 +106,80 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 	}
 	if del, ok := next(t, events).(Delete); !ok || del.UID != "uid-a" {
 		t.Fatalf("want Delete of uid-a, got %#v", del)
+	}
+}
+
+func TestStaleWhenListAndWatchFailAfterTheStart(t *testing.T) {
+	scheme := runtime.NewScheme()
+	dyn := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{jobsGVR: "JobList"}, newJob("a", "uid-a"))
+	var (
+		mu        sync.Mutex
+		forbidden bool
+		watcher   *watchapi.FakeWatcher
+	)
+	denied := apierrors.NewForbidden(jobsGVR.GroupResource(), "", errors.New("RBAC changed"))
+	dyn.PrependReactor("list", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return forbidden, nil, denied
+	})
+	dyn.PrependWatchReactor("jobs", func(k8stesting.Action) (bool, watchapi.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if forbidden {
+			return true, nil, denied
+		}
+		watcher = watchapi.NewFake()
+		return true, watcher, nil
+	})
+	disc := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	disc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "batch/v1",
+		APIResources: []metav1.APIResource{{Name: "jobs", Namespaced: true, Kind: "Job", Verbs: []string{"list", "watch"}}},
+	}}
+	events := make(chan any, 100)
+	w := &Watcher{Dynamic: dyn, Discovery: disc, Events: events, Log: slog.New(slog.DiscardHandler), SyncTimeout: 200 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = w.Run(ctx, time.Hour) }()
+	for {
+		if _, ok := next(t, events).(Synced); ok {
+			break
+		}
+	}
+	if s := w.Stale(); len(s) != 0 {
+		t.Fatalf("Stale() = %v before any failed call", s)
+	}
+
+	// Access is lost: the watch ends, and the informer cannot list or
+	// watch again.
+	mu.Lock()
+	forbidden = true
+	watcher.Stop()
+	mu.Unlock()
+	waitFor(t, func() bool { return len(w.Stale()) == 1 })
+	s := w.Stale()[0]
+	if s.GroupResource != jobsGVR.GroupResource() || !apierrors.IsForbidden(s.Err) || s.Since.IsZero() {
+		t.Errorf("Stale() = %+v", s)
+	}
+	if len(w.Snapshot()) != 1 {
+		t.Errorf("the objects of a stale type should stay, got %d", len(w.Snapshot()))
+	}
+
+	mu.Lock()
+	forbidden = false
+	mu.Unlock()
+	waitFor(t, func() bool { return len(w.Stale()) == 0 })
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); !cond(); {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

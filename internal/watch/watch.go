@@ -17,9 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	watchapi "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/pager"
 )
@@ -84,6 +84,22 @@ type running struct {
 	cancel   context.CancelFunc
 	synced   chan struct{}
 	started  time.Time
+	// calls: the outcome of the list and watch calls of the informer. Nil
+	// for a placeholder.
+	calls *calls
+}
+
+// calls records whether the list and watch calls of an informer fail. An
+// informer retries forever, and its store keeps the objects of its last
+// successful list: when access to a type is lost after the start (RBAC
+// changed, a conversion webhook broke), its objects only go stale.
+type calls struct {
+	mu sync.Mutex
+	// since: the first failed call after the last successful one; zero if
+	// the last call succeeded.
+	since  time.Time
+	err    error
+	warned bool
 }
 
 func (r *running) isSynced() bool {
@@ -187,6 +203,66 @@ func (w *Watcher) Pending() []PendingType {
 		}
 	}
 	return result
+}
+
+// StaleType is a watched type whose list and watch calls have failed for
+// longer than SyncTimeout. Snapshot still holds its objects as they were
+// at the last successful call (none if it never synced).
+type StaleType struct {
+	schema.GroupResource
+	Since time.Time
+	Err   error
+}
+
+// Stale returns the watched types whose list and watch calls have failed
+// for longer than SyncTimeout.
+func (w *Watcher) Stale() []StaleType {
+	w.mu.Lock()
+	rs := make([]*running, 0, len(w.informers))
+	for _, r := range w.informers {
+		rs = append(rs, r)
+	}
+	w.mu.Unlock()
+	var result []StaleType
+	now := time.Now()
+	for _, r := range rs {
+		if r.calls == nil {
+			continue
+		}
+		r.calls.mu.Lock()
+		since, err := r.calls.since, r.calls.err
+		r.calls.mu.Unlock()
+		if !since.IsZero() && now.Sub(since) >= w.syncTimeout() {
+			result = append(result, StaleType{GroupResource: r.gvr.GroupResource(), Since: since, Err: err})
+		}
+	}
+	return result
+}
+
+// record notes the outcome of a list or watch call of the informer of gvr.
+func (w *Watcher) record(ctx context.Context, gvr schema.GroupVersionResource, c *calls, err error) {
+	if ctx.Err() != nil {
+		return // the informer was stopped
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err == nil {
+		if c.warned {
+			w.Log.Info("watching resource again", "resource", gvr.String())
+		}
+		c.since, c.err, c.warned = time.Time{}, nil, false
+		return
+	}
+	now := time.Now()
+	if c.since.IsZero() {
+		c.since = now
+	}
+	c.err = err
+	if !c.warned && now.Sub(c.since) >= w.syncTimeout() {
+		c.warned = true
+		w.Log.Warn("cannot list or watch resource, its objects are stale", "resource", gvr.String(),
+			"since", c.since.UTC().Format(time.RFC3339), "err", err)
+	}
 }
 
 // Snapshot returns all objects of all synced informers.
@@ -488,7 +564,24 @@ func (w *Watcher) probe(ctx context.Context, gvr schema.GroupVersionResource) er
 
 func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 	ctx, cancel := context.WithCancel(ctx)
-	informer := dynamicinformer.NewFilteredDynamicInformer(w.Dynamic, gvr, metav1.NamespaceAll, 0, cache.Indexers{}, nil).Informer()
+	c := &calls{}
+	// The list watcher of dynamicinformer.NewFilteredDynamicInformer, plus
+	// record.
+	client := w.Dynamic.Resource(gvr)
+	lw := &cache.ListWatch{
+		ListWithContextFunc: func(lctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+			obj, err := client.List(lctx, opts)
+			w.record(ctx, gvr, c, err)
+			return obj, err
+		},
+		WatchFuncWithContext: func(lctx context.Context, opts metav1.ListOptions) (watchapi.Interface, error) {
+			wi, err := client.Watch(lctx, opts)
+			w.record(ctx, gvr, c, err)
+			return wi, err
+		},
+	}
+	informer := cache.NewSharedIndexInformerWithOptions(cache.ToListWatcherWithWatchListSemantics(lw, w.Dynamic),
+		&unstructured.Unstructured{}, cache.SharedIndexInformerOptions{ObjectDescription: gvr.String()})
 	if err := informer.SetTransform(stripManagedFields); err != nil {
 		w.Log.Error("set transform", "resource", gvr.String(), "err", err)
 	}
@@ -523,7 +616,7 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 		cancel()
 		return
 	}
-	r := &running{gvr: gvr, informer: informer, cancel: cancel, synced: make(chan struct{}), started: time.Now()}
+	r := &running{gvr: gvr, informer: informer, cancel: cancel, synced: make(chan struct{}), started: time.Now(), calls: c}
 	w.mu.Lock()
 	w.informers[gvr.GroupResource()] = r
 	delete(w.forbidden, gvr.GroupResource())
