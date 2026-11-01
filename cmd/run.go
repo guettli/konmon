@@ -194,6 +194,14 @@ func run(ctx context.Context) error {
 	if runOpts.discoveryInterval <= 0 {
 		return errors.New("--discovery-interval must be positive")
 	}
+	if err := notNegative(
+		flagValue{"--for", runOpts.forDuration},
+		flagValue{"--history-window", runOpts.historyWindow},
+		flagValue{"--retention", runOpts.retention},
+		flagValue{"--resend-resolved", runOpts.resendResolved},
+	); err != nil {
+		return err
+	}
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)

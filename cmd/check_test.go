@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/guettli/konmon/internal/checks"
+	"github.com/guettli/konmon/internal/watch"
 )
 
 func TestRepeatCheckWhile(t *testing.T) {
@@ -152,5 +155,42 @@ func TestPlainNamespaces(t *testing.T) {
 	}
 	if got := (&findingFilter{namespaces: []string{"a", "team-*"}}).plainNamespaces(); got != nil {
 		t.Errorf("glob: got %v", got)
+	}
+}
+
+func TestListingNotes(t *testing.T) {
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	jobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	secrets := schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+	l := describeListing(&watch.ListResult{
+		Forbidden:    []schema.GroupVersionResource{secrets},
+		PerNamespace: map[schema.GroupVersionResource][]string{pods: {"a", "b"}, jobs: {"a", "b"}},
+		ForbiddenIn:  map[string][]schema.GroupVersionResource{"c": {pods, jobs}},
+	})
+	if !l.partial() {
+		t.Error("not partial")
+	}
+	got := strings.Join(l.notes([]string{"check x for 1 object"}), "\n")
+	want := strings.Join([]string{
+		"Not allowed to list in all namespaces, listed in a, b only: jobs.batch, pods",
+		"Not allowed to list in namespace c: jobs.batch, pods",
+		"Not allowed to list: secrets",
+		"Not checked (not allowed to list): check x for 1 object",
+	}, "\n")
+	if got != want {
+		t.Errorf("notes:\n%s\nwant:\n%s", got, want)
+	}
+	if describeListing(&watch.ListResult{}).partial() {
+		t.Error("an empty listing is partial")
+	}
+}
+
+func TestNotNegative(t *testing.T) {
+	if err := notNegative(flagValue{"--for", 0}, flagValue{"--retention", time.Hour}); err != nil {
+		t.Error(err)
+	}
+	err := notNegative(flagValue{"--for", time.Minute}, flagValue{"--retention", -time.Hour})
+	if err == nil || err.Error() != "--retention must not be negative" {
+		t.Errorf("got %v", err)
 	}
 }

@@ -100,7 +100,9 @@ func (s *Snapshot) SetPartial(gr schema.GroupResource, namespaces []string) {
 // known. all: every namespace.
 func (s *Snapshot) covers(gr schema.GroupResource, namespace string, all bool) error {
 	namespaces, ok := s.partial[gr]
-	if !ok || (!all && slices.Contains(namespaces, namespace)) {
+	// Only namespaced types are partial: no object of them has the empty
+	// namespace, so that answer is complete.
+	if !ok || (!all && (namespace == "" || slices.Contains(namespaces, namespace))) {
 		return nil
 	}
 	where := "in all namespaces"

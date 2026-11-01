@@ -529,6 +529,7 @@ export default defineCheck({
       case "listed": ctx.list("services", { namespace: "default" }); break;
       case "owned": ctx.list("services", { owner: obj }); break;
       case "other": ctx.get("services", "elsewhere", "s"); break;
+      case "no-namespace": ctx.get("services", null, "s"); break;
       case "all": ctx.list("services"); break;
       case "node-owner": ctx.list("services", { owner: { metadata: { uid: "n" } } }); break;
       case "uid-owner": ctx.list("services", { owner: "some-uid" }); break;
@@ -539,7 +540,7 @@ export default defineCheck({
     return [];
   },
 });`)
-	snap := NewSnapshot([]Item{pod("same"), pod("listed"), pod("owned"), pod("other"), pod("all"), pod("node-owner"), pod("uid-owner"), pod("caught")},
+	snap := NewSnapshot([]Item{pod("same"), pod("listed"), pod("owned"), pod("other"), pod("all"), pod("node-owner"), pod("uid-owner"), pod("caught"), pod("no-namespace")},
 		[]schema.GroupVersionResource{podsGVR, servicesGVR})
 	snap.SetPartial(servicesGVR.GroupResource(), []string{"default"})
 	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -554,6 +555,8 @@ export default defineCheck({
 		failed[f.Object] = f.Err.Error()
 	}
 	// A cluster-scoped owner or a bare UID says nothing about the namespace.
+	// No namespace: no object of a namespaced type matches, wherever it may
+	// be listed.
 	if len(failed) != 4 || failed["default/other"] == "" || failed["default/all"] == "" ||
 		failed["default/node-owner"] == "" || failed["default/uid-owner"] == "" {
 		t.Fatalf("failures: %v", failed)

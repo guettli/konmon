@@ -273,3 +273,23 @@ func TestTriageBaseline(t *testing.T) {
 		t.Errorf("acknowledged: %v\n%s", err, out.String())
 	}
 }
+
+func TestTriageSaysWhenCountsArePartial(t *testing.T) {
+	editor, err := config.OpenEditor(filepath.Join(t.TempDir(), "konmon.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := conditionFinding("team-a", "w1", "Stalled", "True", "Waiting")
+	var out bytes.Buffer
+	s := &triageSession{
+		ctx: context.Background(), in: bufio.NewReader(strings.NewReader("i\nc\nq\n")), out: &out,
+		editor: editor, base: &config.Config{}, all: []*checks.Finding{f}, universe: []*checks.Finding{f},
+		now: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC), partial: true,
+	}
+	if err := s.run(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "(counts may be too low: not everything could be listed)") {
+		t.Errorf("no note about partial counts:\n%s", out.String())
+	}
+}

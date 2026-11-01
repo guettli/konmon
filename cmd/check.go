@@ -50,6 +50,14 @@ func (o *checkOptions) register(f *pflag.FlagSet) {
 		"Hide findings whose problem started before this: a duration (24h: unchanged for a day) or an RFC3339 timestamp. Combine with --ignore-younger-than for a time window.")
 }
 
+// validate checks the flags of the finding filter and --history-window.
+func (o *checkOptions) validate() error {
+	if err := o.filter.validate(); err != nil {
+		return err
+	}
+	return notNegative(flagValue{"--history-window", o.historyWindow})
+}
+
 // ageWindow returns the start times outside of which findings are hidden.
 // Zero: no limit.
 func (o *checkOptions) ageWindow(now time.Time) (notBefore, notAfter time.Time, err error) {
@@ -183,7 +191,7 @@ type checkRun struct {
 
 // runChecks lists the cluster and runs the checks, like 'konmon check'.
 func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, error) {
-	if err := o.filter.validate(); err != nil {
+	if err := o.validate(); err != nil {
 		return nil, err
 	}
 	if _, _, err := o.ageWindow(time.Now()); err != nil {
@@ -284,6 +292,9 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	}
 	if l.retries < 0 {
 		return errors.New("--retry-count must not be negative")
+	}
+	if err := notNegative(flagValue{"--timeout", l.timeout}); err != nil {
+		return err
 	}
 	if while != nil && len(checkOpts.filter.categories) > 0 && !slices.Contains(checkOpts.filter.categories, checks.CategoryHealth) {
 		return errors.New("--while only matches health findings: --category must include health")
@@ -422,6 +433,72 @@ func uncoveredNotes(failures []checks.Failure, namespaces []string) []string {
 	return notes
 }
 
+// listing is what could not be listed, for the output.
+type listing struct {
+	notAllowed []string // sorted
+	// perNamespace: types which may not be listed in all namespaces, and
+	// the namespaces of --namespace they were listed in.
+	perNamespace map[string][]string
+	forbiddenIn  map[string][]string // namespace → sorted types
+	notChecked   []string
+}
+
+func describeListing(listed *watch.ListResult) listing {
+	l := listing{
+		notAllowed:   make([]string, 0, len(listed.Forbidden)),
+		perNamespace: map[string][]string{},
+		forbiddenIn:  map[string][]string{},
+		notChecked:   make([]string, 0, len(listed.Failed)),
+	}
+	for _, gvr := range listed.Forbidden {
+		l.notAllowed = append(l.notAllowed, checks.FormatResource(gvr.GroupResource()))
+	}
+	slices.Sort(l.notAllowed)
+	for gvr, namespaces := range listed.PerNamespace {
+		l.perNamespace[checks.FormatResource(gvr.GroupResource())] = namespaces
+	}
+	for ns, gvrs := range listed.ForbiddenIn {
+		for _, gvr := range gvrs {
+			l.forbiddenIn[ns] = append(l.forbiddenIn[ns], checks.FormatResource(gvr.GroupResource()))
+		}
+		slices.Sort(l.forbiddenIn[ns])
+	}
+	for _, err := range listed.Failed {
+		l.notChecked = append(l.notChecked, err.Error())
+	}
+	return l
+}
+
+// partial reports whether some objects could not be listed.
+func (l listing) partial() bool {
+	return len(l.notAllowed) > 0 || len(l.perNamespace) > 0 || len(l.forbiddenIn) > 0 || len(l.notChecked) > 0
+}
+
+// notes are the sorted text lines about types which may not be listed and
+// the objects which could not be checked because of that.
+func (l listing) notes(uncovered []string) []string {
+	var lines []string
+	if len(l.notAllowed) > 0 {
+		lines = append(lines, "Not allowed to list: "+strings.Join(l.notAllowed, ", "))
+	}
+	byNamespaces := map[string][]string{}
+	for r, namespaces := range l.perNamespace {
+		k := strings.Join(namespaces, ", ")
+		byNamespaces[k] = append(byNamespaces[k], r)
+	}
+	for namespaces, types := range byNamespaces {
+		lines = append(lines, fmt.Sprintf("Not allowed to list in all namespaces, listed in %s only: %s", namespaces, joinSorted(types)))
+	}
+	for ns, types := range l.forbiddenIn {
+		lines = append(lines, fmt.Sprintf("Not allowed to list in namespace %s: %s", ns, strings.Join(types, ", ")))
+	}
+	for _, s := range uncovered {
+		lines = append(lines, "Not checked (not allowed to list): "+s)
+	}
+	slices.Sort(lines)
+	return lines
+}
+
 // checkNotes are the notes about the listing which were printed: in a
 // loop they are printed again only when they change.
 type checkNotes struct {
@@ -450,7 +527,6 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		return false, err
 	}
 	engine, res, listed, now, ignored := run.engine, run.result, run.listed, run.now, run.ignored
-	forbidden := listed.Forbidden
 	available := listed.Available
 	shown := make([]shownFinding, 0, len(run.findings))
 	for _, f := range run.findings {
@@ -463,38 +539,15 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		}
 		shown = append(shown, shownFinding{f, line})
 	}
-	notAllowed := make([]string, 0, len(forbidden))
-	for _, gvr := range forbidden {
-		notAllowed = append(notAllowed, checks.FormatResource(gvr.GroupResource()))
-	}
-	// perNamespace: types by the namespaces they were listed in.
-	perNamespace := map[string][]string{}
-	jsonPerNamespace := map[string][]string{}
-	for gvr, namespaces := range listed.PerNamespace {
-		r := checks.FormatResource(gvr.GroupResource())
-		k := strings.Join(namespaces, ", ")
-		perNamespace[k] = append(perNamespace[k], r)
-		jsonPerNamespace[r] = namespaces
-	}
-	forbiddenIn := map[string][]string{}
-	for ns, gvrs := range listed.ForbiddenIn {
-		for _, gvr := range gvrs {
-			forbiddenIn[ns] = append(forbiddenIn[ns], checks.FormatResource(gvr.GroupResource()))
-		}
-		slices.Sort(forbiddenIn[ns])
-	}
-	notChecked := make([]string, 0, len(listed.Failed))
-	for _, err := range listed.Failed {
-		notChecked = append(notChecked, err.Error())
-	}
+	l := describeListing(listed)
 	took := time.Since(start)
 
 	health := 0
 	out := cmd.OutOrStdout()
 	if checkOpts.filter.output == "json" {
 		result := checkResult{
-			Findings: []jsonFinding{}, NotAllowed: notAllowed, NotChecked: notChecked,
-			PerNamespace: jsonPerNamespace, ForbiddenIn: forbiddenIn, NotCovered: append([]string{}, run.uncovered...),
+			Findings: []jsonFinding{}, NotAllowed: l.notAllowed, NotChecked: l.notChecked,
+			PerNamespace: l.perNamespace, ForbiddenIn: l.forbiddenIn, NotCovered: append([]string{}, run.uncovered...),
 			Objects: res.Objects, Types: len(available), Checks: len(engine.Checks()), DurationMS: took.Milliseconds(),
 			Ignored: ignored,
 		}
@@ -505,29 +558,14 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 			}
 		}
 		sortJSONFindings(result.Findings)
-		slices.Sort(result.NotAllowed)
 		if err := writeJSON(out, result); err != nil {
 			return false, err
 		}
 	} else {
 		var hygiene int
 		health, hygiene = printFindingLines(out, shown)
-		var lines []string
-		if len(notAllowed) > 0 {
-			lines = append(lines, "Not allowed to list: "+joinSorted(notAllowed))
-		}
-		for namespaces, types := range perNamespace {
-			lines = append(lines, fmt.Sprintf("Not allowed to list in all namespaces, listed in %s only: %s", namespaces, joinSorted(types)))
-		}
-		for ns, types := range forbiddenIn {
-			lines = append(lines, fmt.Sprintf("Not allowed to list in namespace %s: %s", ns, strings.Join(types, ", ")))
-		}
-		for _, s := range run.uncovered {
-			lines = append(lines, "Not checked (not allowed to list): "+s)
-		}
-		slices.Sort(lines)
-		notes.print(out, lines)
-		for _, s := range notChecked {
+		notes.print(out, l.notes(run.uncovered))
+		for _, s := range l.notChecked {
 			_, _ = fmt.Fprintf(out, "Not checked: %s\n", s)
 		}
 		counts := checkOpts.filter.countText(health, hygiene)

@@ -110,3 +110,19 @@ func splitResourceName(s string) (resource, group, name string, err error) {
 
 // Root returns the root command, for generating the CLI reference.
 func Root() *cobra.Command { return rootCmd }
+
+// flagValue is a duration flag, for notNegative.
+type flagValue struct {
+	name  string
+	value time.Duration
+}
+
+// notNegative returns an error for the first negative flag.
+func notNegative(flags ...flagValue) error {
+	for _, f := range flags {
+		if f.value < 0 {
+			return fmt.Errorf("%s must not be negative", f.name)
+		}
+	}
+	return nil
+}
