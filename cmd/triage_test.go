@@ -289,7 +289,7 @@ func TestTriageSaysWhenCountsArePartial(t *testing.T) {
 	if err := s.run(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "(counts include only the objects konmon was allowed to list)") {
+	if !strings.Contains(out.String(), "(counts may be too low: not everything could be listed)") {
 		t.Errorf("no note about partial counts:\n%s", out.String())
 	}
 }

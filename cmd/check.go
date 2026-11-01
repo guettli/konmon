@@ -50,8 +50,6 @@ func (o *checkOptions) register(f *pflag.FlagSet) {
 		"Hide findings whose problem started before this: a duration (24h: unchanged for a day) or an RFC3339 timestamp. Combine with --ignore-younger-than for a time window.")
 }
 
-// ageWindow returns the start times outside of which findings are hidden.
-// Zero: no limit.
 // validate checks the flags of the finding filter and --history-window.
 func (o *checkOptions) validate() error {
 	if err := o.filter.validate(); err != nil {
@@ -60,6 +58,8 @@ func (o *checkOptions) validate() error {
 	return notNegative(flagValue{"--history-window", o.historyWindow})
 }
 
+// ageWindow returns the start times outside of which findings are hidden.
+// Zero: no limit.
 func (o *checkOptions) ageWindow(now time.Time) (notBefore, notAfter time.Time, err error) {
 	for _, s := range []string{o.ignoreOlder, o.ignoreYounger} {
 		if strings.HasPrefix(s, "-") {
@@ -292,6 +292,9 @@ func check(ctx context.Context, cmd *cobra.Command, only []string) error {
 	}
 	if l.retries < 0 {
 		return errors.New("--retry-count must not be negative")
+	}
+	if err := notNegative(flagValue{"--timeout", l.timeout}); err != nil {
+		return err
 	}
 	if while != nil && len(checkOpts.filter.categories) > 0 && !slices.Contains(checkOpts.filter.categories, checks.CategoryHealth) {
 		return errors.New("--while only matches health findings: --category must include health")

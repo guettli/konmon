@@ -80,6 +80,9 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 		}
 		params[check][param] = value
 	}
+	if err := notNegative(flagValue{"--check-timeout", c.timeout}); err != nil {
+		return nil, nil, err
+	}
 	cfg, err := c.config()
 	if err != nil {
 		return nil, nil, err

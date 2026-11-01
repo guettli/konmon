@@ -61,6 +61,7 @@ Examples:
 
 func init() {
 	triageOpts.register(triageCmd.Flags())
+	_ = triageCmd.Flags().MarkHidden("output") // interactive: text only
 	triageCmd.Flags().BoolVar(&triageFromDB, "from-db", false, "Take the open findings from the database of 'konmon run' (--db) instead of listing the cluster.")
 	triageCmd.Flags().BoolVar(&triageBaseline, "baseline", false,
 		"Do not ask: write one narrow ignore rule per open finding, so only new problems are reported. Like the baseline of a linter.")
@@ -70,6 +71,9 @@ func init() {
 }
 
 func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
+	if triageOpts.filter.output != "" && triageOpts.filter.output != "text" {
+		return errors.New("triage is interactive: --output is not supported")
+	}
 	configs := triageOpts.checks.configs
 	if len(configs) == 0 {
 		return errors.New("--config FILE is required: the answers are written to it (it is created if missing)")
@@ -601,7 +605,7 @@ func (t *triageSession) ignore(g *triageGroup) (bool, error) {
 		t.printf("  (counts include only the checks of this run)\n")
 	}
 	if t.partial {
-		t.printf("  (counts include only the objects konmon was allowed to list)\n")
+		t.printf("  (counts may be too low: not everything could be listed)\n")
 	}
 	for i, r := range rungs {
 		extra := ""
