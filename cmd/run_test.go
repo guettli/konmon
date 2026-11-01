@@ -62,7 +62,7 @@ func TestMetrics(t *testing.T) {
 		"\nkonmon_evaluation_interval_seconds 30\n",
 		"\nkonmon_start_time_seconds 1799999000\n",
 		"\nkonmon_build_info{version=\"dev\"} 1\n",
-		"# TYPE konmon_stale_resource_type gauge\nkonmon_stale_resource_type{resource=\"widgets.example.com\"} 1799999500\n",
+		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\nkonmon_stale_resource_type_since_timestamp_seconds{resource=\"widgets.example.com\"} 1799999500\n",
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("missing %q in\n%s", want, rec.Body)
@@ -75,8 +75,8 @@ func TestMetrics(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "\nkonmon_last_evaluation_timestamp_seconds 0\n") {
 		t.Errorf("before the first evaluation the timestamp should be 0:\n%s", rec.Body)
 	}
-	if !strings.HasSuffix(rec.Body.String(), "# TYPE konmon_stale_resource_type gauge\n") {
-		t.Errorf("no stale types: want no konmon_stale_resource_type series:\n%s", rec.Body)
+	if !strings.HasSuffix(rec.Body.String(), "# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\n") {
+		t.Errorf("no stale types: want no konmon_stale_resource_type_since_timestamp_seconds series:\n%s", rec.Body)
 	}
 }
 

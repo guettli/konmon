@@ -365,16 +365,16 @@ func writeMetrics(w io.Writer, ev evaluations, stale staleTypes, started time.Ti
 			m.name, m.help, m.name, m.typ, m.name, m.labels, strconv.FormatFloat(m.value, 'f', -1, 64))
 	}
 	// One series per stale type, so an alert can name it.
-	_, _ = fmt.Fprint(w, "# HELP konmon_stale_resource_type Watched resource types whose list and watch calls fail: "+
+	_, _ = fmt.Fprint(w, "# HELP konmon_stale_resource_type_since_timestamp_seconds Watched resource types whose list and watch calls fail: "+
 		"their objects are out of date. The value is the time of the first failed call, Unix seconds.\n"+
-		"# TYPE konmon_stale_resource_type gauge\n")
+		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\n")
 	if stale == nil {
 		return
 	}
 	types := stale.Stale()
 	slices.SortFunc(types, func(a, b watch.StaleType) int { return strings.Compare(a.String(), b.String()) })
 	for _, t := range types {
-		_, _ = fmt.Fprintf(w, "konmon_stale_resource_type{resource=\"%s\"} %d\n", labelValue(t.String()), t.Since.Unix())
+		_, _ = fmt.Fprintf(w, "konmon_stale_resource_type_since_timestamp_seconds{resource=\"%s\"} %d\n", labelValue(t.String()), t.Since.Unix())
 	}
 }
 

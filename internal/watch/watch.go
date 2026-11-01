@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -263,6 +264,59 @@ func (w *Watcher) record(ctx context.Context, gvr schema.GroupVersionResource, c
 		w.Log.Warn("cannot list or watch resource, its objects are stale", "resource", gvr.String(),
 			"since", c.since.UTC().Format(time.RFC3339), "err", err)
 	}
+}
+
+// recordInitialEvents passes on the events of a watch which streams all
+// objects first (WatchList). It records success when the bookmark at the
+// end of the initial objects arrives, and an error when an Error event or
+// the end of the stream comes first.
+func (w *Watcher) recordInitialEvents(ctx context.Context, gvr schema.GroupVersionResource, c *calls, wi watchapi.Interface) watchapi.Interface {
+	p := &initialEventsWatch{Interface: wi, ch: make(chan watchapi.Event), stopped: make(chan struct{})}
+	go func() {
+		defer close(p.ch)
+		done := false
+		for ev := range wi.ResultChan() {
+			if !done {
+				switch ev.Type {
+				case watchapi.Bookmark:
+					if m, err := apimeta.Accessor(ev.Object); err == nil && m.GetAnnotations()[metav1.InitialEventsAnnotationKey] == "true" {
+						done = true
+						w.record(ctx, gvr, c, nil)
+					}
+				case watchapi.Error:
+					done = true
+					w.record(ctx, gvr, c, apierrors.FromObject(ev.Object))
+				}
+			}
+			select {
+			case p.ch <- ev:
+			case <-p.stopped:
+				return
+			}
+		}
+		select {
+		case <-p.stopped: // stopped by the reflector
+		default:
+			if !done {
+				w.record(ctx, gvr, c, errors.New("watch ended before all objects were sent"))
+			}
+		}
+	}()
+	return p
+}
+
+type initialEventsWatch struct {
+	watchapi.Interface
+	ch      chan watchapi.Event
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (p *initialEventsWatch) ResultChan() <-chan watchapi.Event { return p.ch }
+
+func (p *initialEventsWatch) Stop() {
+	p.once.Do(func() { close(p.stopped) })
+	p.Interface.Stop()
 }
 
 // Snapshot returns all objects of all synced informers.
@@ -576,6 +630,11 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 		},
 		WatchFuncWithContext: func(lctx context.Context, opts metav1.ListOptions) (watchapi.Interface, error) {
 			wi, err := client.Watch(lctx, opts)
+			if err == nil && opts.SendInitialEvents != nil && *opts.SendInitialEvents {
+				// WatchList: the objects come in the stream, which can fail
+				// after the call succeeded (e.g. a broken conversion webhook).
+				return w.recordInitialEvents(ctx, gvr, c, wi), nil
+			}
 			w.record(ctx, gvr, c, err)
 			return wi, err
 		},

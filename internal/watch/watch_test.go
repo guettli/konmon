@@ -154,6 +154,8 @@ func TestStaleWhenListAndWatchFailAfterTheStart(t *testing.T) {
 
 	// Access is lost: the watch ends, and the informer cannot list or
 	// watch again.
+	// The reflector opens the watch after the initial list.
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return watcher != nil })
 	mu.Lock()
 	forbidden = true
 	watcher.Stop()
@@ -171,6 +173,53 @@ func TestStaleWhenListAndWatchFailAfterTheStart(t *testing.T) {
 	forbidden = false
 	mu.Unlock()
 	waitFor(t, func() bool { return len(w.Stale()) == 0 })
+}
+
+func TestStaleWhenTheInitialEventsOfAWatchListFail(t *testing.T) {
+	w := &Watcher{Log: slog.New(slog.DiscardHandler), SyncTimeout: time.Nanosecond}
+	ctx := t.Context()
+	failing := func(c *calls) bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.since.IsZero()
+	}
+	endBookmark := &unstructured.Unstructured{}
+	endBookmark.SetAnnotations(map[string]string{metav1.InitialEventsAnnotationKey: "true"})
+
+	// An Error event in the stream: failing, although the call succeeded.
+	c := &calls{}
+	fake := watchapi.NewFake()
+	wi := w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go fake.Error(&metav1.Status{Status: metav1.StatusFailure, Code: 500, Reason: metav1.StatusReasonInternalError, Message: "conversion webhook"})
+	<-wi.ResultChan()
+	waitFor(t, func() bool { return failing(c) })
+
+	// The stream ends before the bookmark at the end of the initial objects.
+	c = &calls{}
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go func() { fake.Add(newJob("a", "uid-a")); fake.Stop() }()
+	for range wi.ResultChan() {
+	}
+	waitFor(t, func() bool { return failing(c) })
+
+	// All objects sent: the failure is cleared.
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go func() { fake.Add(newJob("a", "uid-a")); fake.Action(watchapi.Bookmark, endBookmark) }()
+	<-wi.ResultChan()
+	<-wi.ResultChan()
+	waitFor(t, func() bool { return !failing(c) })
+
+	// Stopped by the reflector: not a failure.
+	c = &calls{}
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	wi.Stop()
+	time.Sleep(50 * time.Millisecond)
+	if failing(c) {
+		t.Error("a watch stopped by the reflector counts as failure")
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {

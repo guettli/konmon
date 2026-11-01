@@ -102,7 +102,7 @@ A broken konmon cannot report that it is broken. `/metrics` (on `--listen`, Prom
 | `konmon_evaluation_interval_seconds` | `--eval-interval` |
 | `konmon_start_time_seconds` | start of the process |
 | `konmon_build_info{version}` | always 1 |
-| `konmon_stale_resource_type{resource}` | one series per watched type whose list and watch calls have failed for more than 2 minutes; the value is the time of the first failed call |
+| `konmon_stale_resource_type_since_timestamp_seconds{resource}` | one series per watched type whose list and watch calls have failed for more than 2 minutes; the value is the time of the first failed call |
 
 Alert when konmon makes less than a third of the evaluations it should. The rate over 15 minutes also catches a konmon which evaluates once after each liveness restart and then stalls (about 0.1), which a check of the last timestamp misses. Sum per cluster: each pod is its own series, and after a rollout the old pod's series covers the start of the window. Expect it to fire about 20 minutes after konmon stopped evaluating normally (the old rate has to leave the window, then `for`). An evaluation which takes longer than the interval makes the next tick wait, so a konmon which needs 2 × `--eval-interval` per evaluation reads 0.5 and does not fire:
 
@@ -119,7 +119,7 @@ A type which konmon may no longer read (RBAC changed after the start, a broken c
 
 ```yaml
 - alert: KonmonStaleResourceType
-  expr: konmon_stale_resource_type
+  expr: konmon_stale_resource_type_since_timestamp_seconds
   for: 15m
 ```
 
