@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guettli/konmon/internal/watch"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/guettli/konmon/internal/watch"
 )
 
 type fakeEvaluations struct {
