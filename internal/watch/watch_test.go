@@ -199,7 +199,9 @@ func TestStaleWhenTheInitialEventsOfAWatchListFail(t *testing.T) {
 	fake = watchapi.NewFake()
 	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
 	go func() { fake.Add(newJob("a", "uid-a")); fake.Stop() }()
-	for range wi.ResultChan() {
+	<-wi.ResultChan()
+	if _, open := <-wi.ResultChan(); open {
+		t.Fatal("the stream should end")
 	}
 	waitFor(t, func() bool { return failing(c) })
 
