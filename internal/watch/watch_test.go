@@ -321,7 +321,7 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	widgets := schema.GroupResource{Group: "example.com", Resource: "widgets"}
-	stuck := &running{gvr: widgets.WithVersion("v1"), synced: make(chan struct{}), started: time.Now()}
+	stuck := &running{gvr: widgets.WithVersion("v1"), synced: make(chan struct{}), started: time.Now(), calls: &calls{}}
 	w := &Watcher{
 		Log: slog.New(slog.DiscardHandler), SyncTimeout: time.Minute, discovered: true,
 		informers: map[schema.GroupResource]*running{jobsGVR.GroupResource(): {gvr: jobsGVR, synced: done}, widgets: stuck},
@@ -335,6 +335,10 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	}
 	if p := w.Pending(); len(p) != 1 || p[0].GroupResource != widgets || !p[0].Stuck {
 		t.Errorf("Pending() = %v", p)
+	}
+	// Also stale, although no call failed: its findings are frozen.
+	if st := w.Stale(); len(st) != 1 || st[0].GroupResource != widgets || !st[0].Since.Equal(stuck.started) {
+		t.Errorf("Stale() = %v", st)
 	}
 	// A type started later does not block evaluations again.
 	w.informers[widgets] = &running{gvr: widgets.WithVersion("v2"), synced: make(chan struct{}), started: time.Now()}

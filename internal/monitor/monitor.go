@@ -329,9 +329,9 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	}
 	// Objects of pending types are missing: findings of these types keep
 	// their state, and those of checks which read them, unless the type is
-	// stuck. Then a check which reads it fails for the objects it checks
-	// (uncovered: no check-error finding), which keeps their findings, and
-	// reports what it can for the others.
+	// stuck. Then a check which reads it reports what it can without it,
+	// and an uncovered failure (no check-error finding) keeps its previous
+	// findings of the object.
 	pending := map[schema.GroupResource]struct{}{}
 	pendingChecks := map[string]struct{}{}
 	for _, p := range m.source.Pending() {

@@ -43,9 +43,13 @@ type jsRuntime struct {
 	snap    *Snapshot
 	hist    History
 	current *loadedCheck
-	// uncovered: the current call read objects which are not known (see
-	// mustCover).
-	uncovered bool
+	// uncovered: the error the current call threw because it read objects
+	// which are not known (see mustCover); a failure is uncovered only if
+	// the call ended with it, not if the check caught it.
+	uncovered *goja.Object
+	// pendingHas: the current call asked ctx.has about a pending type, and
+	// got false (see mustNotBePending).
+	pendingHas error
 	// Saved before any check code runs: a check may replace the globals.
 	freezeFn goja.Callable
 	dateCtor *goja.Object
@@ -168,7 +172,12 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	rt.set(ctx, "params", wrap(vm, lc.def.Params))
 	rt.set(ctx, "has", func(resource string) bool {
 		gr := rt.resource(lc, resource)
-		rt.mustNotBePending(gr)
+		if err := rt.snap.pendingErr(gr); err != nil {
+			// Not "not served": the check reports what it can without the
+			// type, and its previous findings of the object are kept.
+			rt.pendingHas = err
+			return false
+		}
 		return rt.snap.Available(gr)
 	})
 	rt.set(ctx, "get", func(resource string, namespace goja.Value, name string) goja.Value {
@@ -263,19 +272,30 @@ func (rt *jsRuntime) resource(lc *loadedCheck, resource string) schema.GroupReso
 // namespaces) are not known, and marks the call as uncovered.
 func (rt *jsRuntime) mustCover(gr schema.GroupResource, namespace string, all bool) {
 	if err := rt.snap.covers(gr, namespace, all); err != nil {
-		rt.uncovered = true
-		panic(rt.vm.NewTypeError(err.Error()))
+		rt.throwUncovered(err)
 	}
 }
 
 // mustNotBePending throws if the objects of a type are not known yet, and
-// marks the call as uncovered: neither "not served" nor "no objects" would
-// be the right answer.
+// marks the call as uncovered: "no objects" would be the wrong answer.
 func (rt *jsRuntime) mustNotBePending(gr schema.GroupResource) {
 	if err := rt.snap.pendingErr(gr); err != nil {
-		rt.uncovered = true
-		panic(rt.vm.NewTypeError(err.Error()))
+		rt.throwUncovered(err)
 	}
+}
+
+// throwUncovered throws err as a TypeError and remembers it (see uncovered).
+func (rt *jsRuntime) throwUncovered(err error) {
+	e := rt.vm.NewTypeError(err.Error())
+	rt.uncovered = e
+	panic(e)
+}
+
+// isUncovered reports whether the call ended with the error of
+// throwUncovered.
+func (rt *jsRuntime) isUncovered(err error) bool {
+	var ex *goja.Exception
+	return rt.uncovered != nil && errors.As(err, &ex) && ex.Value() != nil && ex.Value().SameAs(rt.uncovered)
 }
 
 // readable resolves a resource name and makes sure its objects are known.
@@ -349,18 +369,22 @@ func (rt *jsRuntime) run(t task) taskResult {
 	rt.freeze(resource)
 	for _, d := range t.defs {
 		lc := rt.byName[d.Name]
-		rt.uncovered = false
+		rt.uncovered, rt.pendingHas = nil, nil
 		findings, err := rt.call(lc, obj, resource, t.item)
 		res.calls++
+		failure := Failure{Check: d.Name, UID: string(t.item.Obj.GetUID()), Object: t.item.Obj.GetNamespace() + "/" + t.item.Obj.GetName()}
 		if err != nil {
-			uid := string(t.item.Obj.GetUID())
-			res.failures = append(res.failures, Failure{
-				Check: d.Name, UID: uid, Object: t.item.Obj.GetNamespace() + "/" + t.item.Obj.GetName(), Err: err,
-				Uncovered: rt.uncovered,
-			})
+			failure.Err, failure.Uncovered = err, rt.isUncovered(err)
+			res.failures = append(res.failures, failure)
 			continue
 		}
 		res.findings = append(res.findings, findings...)
+		if rt.pendingHas != nil {
+			// Its findings are what it could check; the uncovered failure
+			// keeps those it could not.
+			failure.Err, failure.Uncovered = rt.pendingHas, true
+			res.failures = append(res.failures, failure)
+		}
 	}
 	return res
 }

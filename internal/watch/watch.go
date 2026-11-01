@@ -209,8 +209,9 @@ func (w *Watcher) Pending() []PendingType {
 }
 
 // StaleType is a watched type whose list and watch calls have failed for
-// longer than SyncTimeout. Snapshot still holds its objects as they were
-// at the last successful call (none if it never synced).
+// longer than SyncTimeout, or whose first list has not finished after
+// SyncTimeout. Snapshot still holds its objects as they were at the last
+// successful call (none if it never synced).
 type StaleType struct {
 	schema.GroupResource
 	Since time.Time
@@ -218,7 +219,7 @@ type StaleType struct {
 }
 
 // Stale returns the watched types whose list and watch calls have failed
-// for longer than SyncTimeout.
+// for longer than SyncTimeout, or which have not synced within it.
 func (w *Watcher) Stale() []StaleType {
 	w.mu.Lock()
 	rs := make([]*running, 0, len(w.informers))
@@ -235,6 +236,14 @@ func (w *Watcher) Stale() []StaleType {
 		r.calls.mu.Lock()
 		since, err := r.calls.since, r.calls.err
 		r.calls.mu.Unlock()
+		if !r.isSynced() && (since.IsZero() || r.started.Before(since)) {
+			// Its first list has not finished, even without failed calls
+			// (a slow list, a WatchList stream without its end).
+			since = r.started
+			if err == nil {
+				err = errors.New("the first list has not finished")
+			}
+		}
 		if !since.IsZero() && now.Sub(since) >= w.syncTimeout() {
 			result = append(result, StaleType{GroupResource: r.gvr.GroupResource(), Since: since, Err: err})
 		}
@@ -244,7 +253,8 @@ func (w *Watcher) Stale() []StaleType {
 
 // SkippedType is a type which is not watched because the probe list call
 // failed: Forbidden (RBAC), NotFound or MethodNotSupported. Reason is the
-// Kubernetes status reason of the error.
+// Kubernetes status reason of the error (Forbidden, NotFound,
+// MethodNotAllowed).
 type SkippedType struct {
 	schema.GroupResource
 	Reason string
@@ -509,12 +519,19 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		wanted[gvr.GroupResource()] = gvr
 	}
 
+	// failedGroups: API groups whose discovery failed; their types may only
+	// be missing because of that.
+	failedGroups := map[string]bool{}
+	var groupErr *discovery.ErrGroupDiscoveryFailed
+	if errors.As(partialErr, &groupErr) {
+		for gv := range groupErr.Groups {
+			failedGroups[gv.Group] = true
+		}
+	}
 	w.mu.Lock()
-	if !partial {
-		for gr := range w.skipped {
-			if _, ok := wanted[gr]; !ok {
-				delete(w.skipped, gr) // the type is gone
-			}
+	for gr := range w.skipped {
+		if _, ok := wanted[gr]; !ok && !failedGroups[gr.Group] {
+			delete(w.skipped, gr) // the type is gone
 		}
 	}
 	var gone []schema.GroupVersionResource
