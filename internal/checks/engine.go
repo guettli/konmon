@@ -43,6 +43,7 @@ type Options struct {
 // Engine runs checks. Evaluate must not be called concurrently.
 type Engine struct {
 	defs     []*Definition
+	defined  map[string]bool // all loaded check names, also disabled ones
 	opts     Options
 	mu       sync.Mutex
 	runtimes []*jsRuntime
@@ -102,9 +103,10 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 			return nil, fmt.Errorf("no check matches %q", p)
 		}
 	}
-	e := &Engine{opts: opts}
+	e := &Engine{opts: opts, defined: map[string]bool{}}
 	for _, name := range order {
 		d := byName[name]
+		e.defined[name] = true
 		if globMatch(name, opts.Disabled) || (len(opts.Only) > 0 && !globMatch(name, opts.Only)) ||
 			(len(opts.Categories) > 0 && !slices.Contains(opts.Categories, d.Category)) {
 			continue
@@ -172,6 +174,10 @@ type Failure struct {
 	// Object is namespace/name, for messages.
 	Object string
 	Err    error
+	// Uncovered: the check read a type in a namespace whose objects could
+	// not be listed (RBAC, see Snapshot.SetPartial). That is no problem of
+	// the cluster: no ErrorCheck finding.
+	Uncovered bool
 }
 
 // Result of one evaluation.

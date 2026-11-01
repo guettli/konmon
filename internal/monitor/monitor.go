@@ -28,6 +28,8 @@ type Source interface {
 	Snapshot() []watch.Item
 	// Available returns the types whose objects are fully known.
 	Available() []schema.GroupVersionResource
+	// Pending returns the watched types whose objects are not known yet.
+	Pending() []watch.PendingType
 }
 
 // Notifier receives the state of all findings after each evaluation.
@@ -68,13 +70,17 @@ type Monitor struct {
 	source   Source
 	notifier Notifier
 
-	lastEval atomic.Int64 // unix ms of the last successful evaluation
+	lastEval    atomic.Int64  // unix ms of the last successful evaluation
+	evaluations atomic.Uint64 // successful evaluations
 }
 
 // New creates a Monitor. notifier may be nil.
 func New(cfg Config, s *store.Store, source Source, notifier Notifier) *Monitor {
 	return &Monitor{cfg: cfg, store: s, source: source, notifier: notifier}
 }
+
+// Evaluations returns the number of successful evaluations.
+func (m *Monitor) Evaluations() uint64 { return m.evaluations.Load() }
 
 // LastEvaluation returns the time of the last successful evaluation.
 func (m *Monitor) LastEvaluation() time.Time {
@@ -100,6 +106,10 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
 
+	// first: no evaluation of a synced source yet. The first one runs as
+	// soon as the source has synced, not one EvalInterval after the start:
+	// konmon is not ready (/readyz) before it.
+	first := true
 	var batch []any
 	doFlush := func() error {
 		if len(batch) == 0 {
@@ -131,9 +141,19 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if err := doFlush(); err != nil {
 				return err
 			}
+			if first && m.source.Synced() {
+				first = false
+				eval.Reset(m.cfg.EvalInterval)
+				if err := m.Evaluate(ctx, time.Now()); err != nil {
+					m.cfg.Log.Error("evaluation failed", "err", err)
+				}
+			}
 		case <-eval.C:
 			if err := doFlush(); err != nil {
 				return err
+			}
+			if m.source.Synced() {
+				first = false
 			}
 			if err := m.Evaluate(ctx, time.Now()); err != nil {
 				m.cfg.Log.Error("evaluation failed", "err", err)
@@ -296,13 +316,32 @@ func Conditions(obj *unstructured.Unstructured, gvr schema.GroupVersionResource)
 	return result
 }
 
-// Evaluate runs the checks, updates the findings and notifies. It does
-// nothing until the source has synced: otherwise findings of objects which
-// are not listed yet would be resolved.
+// Evaluate runs the checks, updates the findings and notifies. It does not
+// evaluate until the source has synced: otherwise findings of objects which
+// are not listed yet would be resolved. Findings of types which are still
+// pending keep their state.
 func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	if !m.source.Synced() {
 		m.cfg.Log.Debug("not synced yet, skipping evaluation")
-		return nil
+		// Alerts of the store (from before a restart) are sent again, or
+		// Alertmanager would resolve them.
+		return m.notifyOpen(ctx, now, 4*m.cfg.EvalInterval)
+	}
+	// Objects of pending types are missing: findings of these types keep
+	// their state, and those of checks which read them, unless the type is
+	// stuck (then these checks report what they can without it).
+	pending := map[schema.GroupResource]struct{}{}
+	pendingChecks := map[string]struct{}{}
+	for _, p := range m.source.Pending() {
+		pending[p.GroupResource] = struct{}{}
+		if p.Stuck {
+			continue
+		}
+		for _, d := range m.cfg.Checks.Checks() {
+			if d.DependsOn(p.GroupResource) {
+				pendingChecks[d.Name] = struct{}{}
+			}
+		}
 	}
 	var items []checks.Item
 	for _, it := range m.source.Snapshot() {
@@ -327,7 +366,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	cancel()
 	if err != nil {
 		nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		nerr := m.notifyOpen(nctx, now)
+		nerr := m.notifyOpen(nctx, now, 0)
 		ncancel()
 		if nerr != nil {
 			m.cfg.Log.Error("notify after aborted evaluation", "err", nerr)
@@ -359,8 +398,14 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 
 	// A check which failed for an object keeps its previous findings for
 	// that object: otherwise they would resolve, and fire again later with
-	// a new start time.
+	// a new start time. The same for objects of a type which is pending.
 	keep := func(r *store.FindingRow) bool {
+		if _, ok := pending[r.Finding.GVR.GroupResource()]; ok {
+			return true
+		}
+		if _, ok := pendingChecks[r.Finding.Check]; ok {
+			return true
+		}
 		_, ok := failed[[2]string{r.Finding.Check, r.Finding.UID}]
 		return ok
 	}
@@ -394,7 +439,10 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 			}
 		}
 	}
-	m.lastEval.Store(now.UnixMilli())
+	m.evaluations.Add(1)
+	if m.lastEval.Swap(now.UnixMilli()) == 0 {
+		m.cfg.Log.Info("first evaluation finished", "open", len(open))
+	}
 	if m.notifier == nil {
 		return nil
 	}
@@ -424,8 +472,11 @@ func (m *Monitor) forOf(f *checks.Finding) time.Duration {
 	return m.cfg.For
 }
 
-// notifyOpen sends the findings which are firing according to the store.
-func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
+// notifyOpen sends the findings which fired at their last evaluation,
+// according to the store. maxAge (0: any) skips findings not seen for
+// longer: after a long downtime the store is stale, Alertmanager has
+// resolved them, and the next evaluation tells.
+func (m *Monitor) notifyOpen(ctx context.Context, now time.Time, maxAge time.Duration) error {
 	if m.notifier == nil {
 		return nil
 	}
@@ -435,7 +486,8 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time) error {
 	}
 	var firing []store.FindingRow
 	for _, r := range open {
-		if r.ResolvedAt.IsZero() && now.Sub(r.FirstSeen) >= m.forOf(&r.Finding) && r.Finding.Category == checks.CategoryHealth {
+		if r.ResolvedAt.IsZero() && r.LastSeen.Sub(r.FirstSeen) >= m.forOf(&r.Finding) &&
+			(maxAge == 0 || now.Sub(r.LastSeen) < maxAge) && r.Finding.Category == checks.CategoryHealth {
 			firing = append(firing, r)
 		}
 	}

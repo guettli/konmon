@@ -45,6 +45,22 @@ func (o *findingFilter) validate() error {
 	return nil
 }
 
+// plainNamespaces returns the --namespace values if none is a glob
+// pattern: a namespace user may list objects in them, but not in all
+// namespaces.
+func (o *findingFilter) plainNamespaces() []string {
+	if slices.ContainsFunc(o.namespaces, func(p string) bool { return strings.ContainsAny(p, `*?[\`) }) {
+		return nil
+	}
+	var namespaces []string
+	for _, ns := range o.namespaces {
+		if !slices.Contains(namespaces, ns) {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	return namespaces
+}
+
 func (o *findingFilter) match(f *checks.Finding) bool {
 	if f.Check == checks.ErrorCheck {
 		// A failing check makes every result incomplete, whatever the

@@ -26,18 +26,23 @@ export default defineCheck({
     }
     const findings: Finding[] = [];
     if (!ctx.has("services")) return [];
+    // A route may attach to several listeners (sectionName, port) of the
+    // same Gateway: one finding per Gateway.
+    const seen = new Set<string>();
     for (const p of obj.spec?.parentRefs ?? []) {
       const kind = p.kind ?? "Gateway";
       if ((p.group ?? "gateway.networking.k8s.io") !== "gateway.networking.k8s.io" || kind !== "Gateway") continue;
       const pns = p.namespace ?? ns;
+      const key = `parent/${pns}/${p.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (!ctx.get("gateways.gateway.networking.k8s.io", pns, p.name)) {
         findings.push({
-          key: `parent/${pns}/${p.name}`,
+          key,
           message: `HTTPRoute uses the Gateway ${pns}/${p.name} which does not exist`,
         });
       }
     }
-    const seen = new Set<string>();
     for (const rule of obj.spec?.rules ?? []) {
       for (const b of rule.backendRefs ?? []) {
         if ((b.kind ?? "Service") !== "Service" || (b.group ?? "") !== "") continue;

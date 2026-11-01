@@ -36,7 +36,7 @@ type checkFlags struct {
 }
 
 func (c *checkFlags) register(f *pflag.FlagSet) {
-	f.StringArrayVar(&c.configs, "config", nil, "Config file with ignore rules (YAML, see README). Can be given multiple times: the rules are merged.")
+	f.StringArrayVar(&c.configs, "config", nil, "Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.")
 	f.StringArrayVar(&c.dirs, "checks", nil, "Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.")
 	f.StringSliceVar(&c.disabled, "disable-check", nil, "Checks to disable, by name. Comma-separated, glob patterns allowed.")
 	f.StringArrayVar(&c.params, "check-param", nil, "Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.")
@@ -79,6 +79,9 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 			params[check] = map[string]string{}
 		}
 		params[check][param] = value
+	}
+	if err := notNegative(flagValue{"--check-timeout", c.timeout}); err != nil {
+		return nil, nil, err
 	}
 	cfg, err := c.config()
 	if err != nil {

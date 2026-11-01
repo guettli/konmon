@@ -90,6 +90,20 @@ cases:
           - {type: Initialized, status: "True"}
     expect: []
 
+  - name: starting pod within grace period, with Ready as the kubelet writes it
+    resource: pods
+    now: 2026-01-01T00:00:10Z
+    object:
+      metadata: {name: p, namespace: default}
+      status:
+        containerStatuses: [{name: app, restartCount: 0}]
+        conditions:
+          - {type: Initialized, status: "True"}
+          - {type: Ready, status: "False", reason: ContainersNotReady, message: "containers with unready status: [app]", lastTransitionTime: "2026-01-01T00:00:00Z"}
+          - {type: ContainersReady, status: "False", reason: ContainersNotReady, message: "containers with unready status: [app]", lastTransitionTime: "2026-01-01T00:00:00Z"}
+          - {type: PodScheduled, status: "True"}
+    expect: []
+
   - name: starting pod after the grace period
     resource: pods
     now: 2026-01-01T00:01:00Z
@@ -289,3 +303,13 @@ cases:
         condition: Ready
         message: 'Condition Ready=False X ""'
         details: {status: "False", reason: X, message: ""}
+
+  - name: PVC condition Unused is informational
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: data, namespace: default}
+      status:
+        phase: Bound
+        conditions:
+          - {type: Unused, status: "False", reason: PodUsingPVC, message: A pod is currently referencing this PVC}
+    expect: []

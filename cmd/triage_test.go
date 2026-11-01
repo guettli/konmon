@@ -175,6 +175,27 @@ func TestTriageCheckErrorLadder(t *testing.T) {
 	}
 }
 
+func TestTriageSnoozeCheckErrorOnlyThatCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	boom := &checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Severity: "warning", Key: "boom", Message: "check boom failed"}
+	bang := &checks.Finding{Check: checks.ErrorCheck, Category: checks.CategoryHealth, Severity: "warning", Key: "bang", Message: "check bang failed"}
+	out := runTriage(t, path, "s\n\n\nq\n", boom, bang)
+	if !strings.Contains(out, "[1/2]") {
+		t.Errorf("want one group per failing check:\n%s", out)
+	}
+	cfg, err := config.Load([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ignore) != 1 || cfg.Ignore[0].Key == "" {
+		t.Fatalf("rules: %+v", cfg.Ignore)
+	}
+	other := &checks.Finding{Check: checks.ErrorCheck, Key: "my-new-check", Message: "check my-new-check failed"}
+	if cfg.Ignored(other, time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)) != nil {
+		t.Errorf("the snooze hides another failing check: %+v", cfg.Ignore[0])
+	}
+}
+
 func TestTriageRejectsPastUntil(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "konmon.yaml")
 	out := runTriage(t, path, "s\n2020-01-01\n3d\n\n", conditionFinding("a", "w1", "Ready", "False", "Down"))
@@ -250,5 +271,25 @@ func TestTriageBaseline(t *testing.T) {
 	}
 	if err := s.baseline("90d"); err != nil || !strings.Contains(out.String(), "Not baselined: 1 finding") {
 		t.Errorf("acknowledged: %v\n%s", err, out.String())
+	}
+}
+
+func TestTriageSaysWhenCountsArePartial(t *testing.T) {
+	editor, err := config.OpenEditor(filepath.Join(t.TempDir(), "konmon.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := conditionFinding("team-a", "w1", "Stalled", "True", "Waiting")
+	var out bytes.Buffer
+	s := &triageSession{
+		ctx: context.Background(), in: bufio.NewReader(strings.NewReader("i\nc\nq\n")), out: &out,
+		editor: editor, base: &config.Config{}, all: []*checks.Finding{f}, universe: []*checks.Finding{f},
+		now: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC), partial: true,
+	}
+	if err := s.run(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "(counts may be too low: not everything could be listed)") {
+		t.Errorf("no note about partial counts:\n%s", out.String())
 	}
 }

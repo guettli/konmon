@@ -7,7 +7,7 @@ GOVULNCHECK := $(GO_TOOL) govulncheck
 TSC := npx --no-install tsc
 PRETTIER := npx --no-install prettier
 
-.PHONY: check test build-all lint typescript fmt
+.PHONY: check test build-all lint typescript fmt docs e2e
 
 check: test build-all lint typescript
 
@@ -27,6 +27,16 @@ lint:
 	$(GOVULNCHECK) ./...
 	go mod tidy && git diff --exit-code go.mod go.sum
 	cd tools && go mod tidy && git diff --exit-code go.mod go.sum
+	shellcheck hack/*.sh
+	$(MAKE) docs && test -z "$$(git status --porcelain -- docs)" || (git status --short -- docs; echo 'docs are out of date: run make docs'; exit 1)
+
+# Generated docs: the CLI reference (docs/cli) and the table of core checks.
+docs:
+	go run ./internal/docgen
+
+# End-to-end test on a kind cluster (needs kind and docker).
+e2e:
+	hack/e2e.sh
 
 node_modules: package.json package-lock.json
 	npm ci --ignore-scripts --no-audit --no-fund

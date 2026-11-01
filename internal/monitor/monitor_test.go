@@ -22,14 +22,18 @@ var (
 )
 
 type fakeSource struct {
-	synced bool
-	items  []watch.Item
+	synced  bool
+	items   []watch.Item
+	pending []watch.PendingType
+	extra   []schema.GroupVersionResource // available besides jobs
 }
+
+func (f *fakeSource) Pending() []watch.PendingType { return f.pending }
 
 func (f *fakeSource) Synced() bool           { return f.synced }
 func (f *fakeSource) Snapshot() []watch.Item { return f.items }
 func (f *fakeSource) Available() []schema.GroupVersionResource {
-	return []schema.GroupVersionResource{jobsGVR}
+	return append([]schema.GroupVersionResource{jobsGVR}, f.extra...)
 }
 
 type recordingNotifier struct {
@@ -78,6 +82,15 @@ export default defineCheck({
   },
 });`
 
+// needsServices reports every job, but only when services are known.
+const needsServices = `
+export default {
+  name: "needs-services",
+  match: { resources: ["jobs.batch"] },
+  reads: ["services"],
+  check(job, ctx) { return ctx.has("services") ? [{ message: "job without service" }] : []; },
+};`
+
 const tidy = `
 export default {
   name: "tidy",
@@ -89,7 +102,7 @@ export default {
 func newTestMonitor(t *testing.T, src Source, n Notifier) (*Monitor, *store.Store) {
 	t.Helper()
 	engine, err := checks.Load(checks.CoreFiles().Sources, []checks.Source{
-		{Path: "flaky.ts", Code: flaky}, {Path: "tidy.js", Code: tidy},
+		{Path: "flaky.ts", Code: flaky}, {Path: "tidy.js", Code: tidy}, {Path: "needs-services.js", Code: needsServices},
 	}, checks.Options{Workers: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -228,6 +241,96 @@ func TestEvaluateFiresAfterForAndResolves(t *testing.T) {
 	}
 	if len(n.resolved) != 0 {
 		t.Errorf("resolved alert should not be re-sent after ResendResolved: %+v", n.resolved)
+	}
+}
+
+func TestFiringAlertsStayWhileTheSourceIsNotSyncedOrPending(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	for _, at := range []time.Duration{0, time.Minute} {
+		if err := m.Evaluate(ctx, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(n.firing) != 1 {
+		t.Fatalf("want 1 firing, got %+v", n.firing)
+	}
+
+	// The informer of jobs is replaced (a new preferred version): its
+	// objects are missing, the finding stays open.
+	src.items, src.pending = nil, []watch.PendingType{{GroupResource: jobsGVR.GroupResource(), Stuck: true}}
+	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 || len(n.resolved) != 0 {
+		t.Errorf("pending type: want 1 firing, 0 resolved; got %d, %d", len(n.firing), len(n.resolved))
+	}
+
+	// Not synced (e.g. after a restart): no evaluation, but the open
+	// alerts are sent again; not after a long downtime.
+	src.items, src.pending = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}, nil
+	if err := m.Evaluate(ctx, t0.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	src.synced = false
+	n.firing = nil
+	if err := m.Evaluate(ctx, t0.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 {
+		t.Errorf("not synced: want the firing alert again, got %+v", n.firing)
+	}
+	n.firing = nil
+	if err := m.Evaluate(ctx, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 0 {
+		t.Errorf("not synced after a long downtime: want no alert from the stale store, got %+v", n.firing)
+	}
+}
+
+func TestFindingsOfChecksWhichReadAPendingTypeStay(t *testing.T) {
+	services := schema.GroupVersionResource{Version: "v1", Resource: "services"}
+	src := &fakeSource{synced: true, extra: []schema.GroupVersionResource{services}}
+	n := &recordingNotifier{}
+	m, st := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", false, "")}}
+	if err := m.Evaluate(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	// The services informer is replaced: not available, pending.
+	src.extra, src.pending = nil, []watch.PendingType{{GroupResource: services.GroupResource()}}
+	if err := m.Evaluate(ctx, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	open, err := st.FindingsAt(ctx, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range open {
+		if r.Finding.Check == "needs-services" && r.ResolvedAt.IsZero() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the finding of a check which reads a pending type resolved")
+	}
+	// Stuck: the check reports what it can without the type.
+	src.pending[0].Stuck = true
+	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ = st.FindingsAt(ctx, t0.Add(2*time.Minute)); len(open) != 0 {
+		for _, r := range open {
+			if r.Finding.Check == "needs-services" && r.ResolvedAt.IsZero() {
+				t.Error("findings of a check which reads a stuck type are frozen")
+			}
+		}
 	}
 }
 
@@ -404,5 +507,26 @@ func TestIgnoreRuleStartsAndStopsMatching(t *testing.T) {
 	eval(6 * time.Minute)
 	if len(n.firing) != 1 {
 		t.Errorf("want firing again after For, got %d", len(n.firing))
+	}
+}
+
+func TestRunEvaluatesAsSoonAsSynced(t *testing.T) {
+	src := &fakeSource{synced: true}
+	m, _ := newTestMonitor(t, src, nil) // EvalInterval 30s
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx, make(chan any)) }()
+	for deadline := time.Now().Add(5 * time.Second); m.LastEvaluation().IsZero() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if m.LastEvaluation().IsZero() {
+		t.Error("the first evaluation should run right after the sync, not one EvalInterval later")
+	}
+	if m.Evaluations() != 1 {
+		t.Errorf("Evaluations() = %d, want 1", m.Evaluations())
 	}
 }

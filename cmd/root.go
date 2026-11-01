@@ -41,14 +41,22 @@ Monitoring:  konmon run, which keeps a local copy with history in SQLite
 False positives: 'konmon triage' fixes them in your config file, and
 'konmon report' tells the maintainers.`,
 	SilenceUsage: true,
+	// Execute prints errors: an exitError only sets the exit code.
+	SilenceErrors: true,
 }
 
 // Execute runs the root command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	cmd, err := rootCmd.ExecuteC()
+	if err != nil {
 		var exit exitError
 		if errors.As(err, &exit) {
 			os.Exit(int(exit))
+		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		if cmd == checkCmd {
+			// 1 means health findings there.
+			os.Exit(int(errCheckFailed))
 		}
 		os.Exit(1)
 	}
@@ -96,6 +104,25 @@ func splitResourceName(s string) (resource, group, name string, err error) {
 	if !ok || resource == "" || name == "" {
 		return "", "", "", fmt.Errorf("expected RESOURCE/NAME, e.g. pods/my-pod or deployments.apps/my-app, got %q", s)
 	}
-	resource, group, _ = strings.Cut(resource, ".")
+	resource, group, _ = strings.Cut(strings.ToLower(resource), ".")
 	return resource, group, name, nil
+}
+
+// Root returns the root command, for generating the CLI reference.
+func Root() *cobra.Command { return rootCmd }
+
+// flagValue is a duration flag, for notNegative.
+type flagValue struct {
+	name  string
+	value time.Duration
+}
+
+// notNegative returns an error for the first negative flag.
+func notNegative(flags ...flagValue) error {
+	for _, f := range flags {
+		if f.value < 0 {
+			return fmt.Errorf("%s must not be negative", f.name)
+		}
+	}
+	return nil
 }

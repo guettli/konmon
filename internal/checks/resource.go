@@ -30,9 +30,10 @@ func Denied(gr schema.GroupResource) bool {
 // ParseResource parses "resource" (core group) or "resource.group", like
 // kubectl does for the full form: "pods", "deployments.apps",
 // "ingresses.networking.k8s.io". A name without a dot is always the core
-// group, so it never matches a custom resource of the same name.
+// group, so it never matches a custom resource of the same name. Case does
+// not matter: resource and group names are always lowercase.
 func ParseResource(s string) (schema.GroupResource, error) {
-	s = strings.TrimSpace(s)
+	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" || s == "*" {
 		return schema.GroupResource{}, fmt.Errorf("invalid resource %q", s)
 	}
@@ -40,7 +41,7 @@ func ParseResource(s string) (schema.GroupResource, error) {
 	if resource == "" || strings.ContainsAny(s, "/* ") {
 		return schema.GroupResource{}, fmt.Errorf("invalid resource %q: use resource or resource.group", s)
 	}
-	return schema.GroupResource{Group: group, Resource: strings.ToLower(resource)}, nil
+	return schema.GroupResource{Group: group, Resource: resource}, nil
 }
 
 // FormatResource is the inverse of ParseResource.

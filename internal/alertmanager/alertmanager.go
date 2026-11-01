@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/guettli/konmon/internal/store"
@@ -33,6 +34,10 @@ type Client struct {
 	// GeneratorURL is shown as source link in Alertmanager. Optional.
 	GeneratorURL string
 	HTTP         *http.Client
+
+	mu sync.Mutex
+	// firing are the alerts of the last Notify, by labelKey.
+	firing map[string]Alert
 }
 
 // Alert is the Alertmanager v2 postable alert.
@@ -54,16 +59,37 @@ func (c *Client) Notify(ctx context.Context, now time.Time, firing, resolved []s
 	for _, a := range alerts {
 		firingLabels[labelKey(a.Labels)] = struct{}{}
 	}
+	sent := make(map[string]struct{}, len(alerts)+len(resolved))
+	for k := range firingLabels {
+		sent[k] = struct{}{}
+	}
 	for i := range resolved {
 		a := c.alert(&resolved[i], now, resolved[i].ResolvedAt)
 		// The same alert can be resolved (old object) and firing (a new
 		// object with the same name, e.g. a recreated StatefulSet Pod).
 		// Alertmanager would take the last one; firing must win.
-		if _, ok := firingLabels[labelKey(a.Labels)]; ok {
+		k := labelKey(a.Labels)
+		if _, ok := sent[k]; ok {
 			continue
 		}
+		sent[k] = struct{}{}
 		alerts = append(alerts, a)
 	}
+	// An alert which fired last time and is neither firing nor resolved
+	// now changed its labels (e.g. the check raised the severity of a
+	// finding): resolve the old one, or it fires until its endsAt.
+	c.mu.Lock()
+	for k, old := range c.firing {
+		if _, ok := sent[k]; !ok {
+			old.EndsAt = now
+			alerts = append(alerts, old)
+		}
+	}
+	c.firing = make(map[string]Alert, len(firing))
+	for _, a := range alerts[:len(firing)] {
+		c.firing[labelKey(a.Labels)] = a
+	}
+	c.mu.Unlock()
 	if c.Watchdog {
 		labels := c.labels()
 		labels["alertname"] = "KonmonWatchdog"

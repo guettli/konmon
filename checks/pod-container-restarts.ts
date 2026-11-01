@@ -2,7 +2,8 @@
 // A container which starts again and again does not show up in
 // status.conditions. Once it is ready again the finding resolves:
 // restartCount only grows, so without that gate a recovered Pod would be
-// reported forever.
+// reported forever. A finished Pod (a Job Pod which succeeded after
+// retries) is not reported: it is not ready because it is done.
 //
 // Ported from check-conditions (github.com/guettli/check-conditions).
 import { defineCheck } from "konmon";
@@ -17,6 +18,8 @@ export default defineCheck({
   check(pod, ctx) {
     const limit = ctx.params.restarts;
     if (limit <= 0) return [];
+    const phase = pod.status?.phase;
+    if (phase === "Succeeded" || phase === "Failed") return [];
     const findings = [];
     for (const key of ["containerStatuses", "initContainerStatuses", "ephemeralContainerStatuses"]) {
       for (const s of pod.status?.[key] ?? []) {

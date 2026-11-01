@@ -1,0 +1,6 @@
+# kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'
+# For real use pin a release, see docs/deploy.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - konmon.yaml

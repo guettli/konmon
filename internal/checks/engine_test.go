@@ -112,6 +112,52 @@ export default defineCheck({
 	}
 }
 
+func TestFindingsMayHoldPartsOfObjects(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "parts",
+  match: { resources: ["pods"] },
+  check(obj) {
+    return [
+      { key: "a", message: "m", details: obj.metadata as any },
+      { key: "b", message: "m", details: { first: obj.status.conditions[0] as any } },
+    ];
+  },
+});`)
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 0 {
+		t.Fatalf("failures: %v", res.Failures)
+	}
+	if len(res.Findings) != 2 {
+		t.Fatalf("findings: %+v", res.Findings)
+	}
+	if got := res.Findings[0].Details["name"]; got != "a" {
+		t.Errorf("details from an object: %v", res.Findings[0].Details)
+	}
+	if got := res.Findings[1].Details["first"]; got != `{"status":"False","type":"Zeta"}` {
+		t.Errorf("a nested object: %q", got)
+	}
+}
+
+func TestCyclicFindingsDoNotCrash(t *testing.T) {
+	e := load(t, `
+export default {
+  name: "cycle",
+  match: { resources: ["pods"] },
+  check() {
+    const f: any = { message: "m", details: {} };
+    f.self = f;
+    f.details.self = f.details;
+    return [f];
+  },
+};`)
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 1 || !strings.Contains(res.Failures[0].Err.Error(), "details.self") {
+		t.Errorf("want a failure for the cyclic details, got %+v", res.Failures)
+	}
+}
+
 func TestGetListAndReads(t *testing.T) {
 	e := load(t, `
 import { defineCheck } from "konmon";
@@ -417,6 +463,20 @@ func TestCoreTestsOfReplacedChecksAreSkipped(t *testing.T) {
 	}
 }
 
+func TestUserTestsOfDisabledChecksAreSkipped(t *testing.T) {
+	mine := `export default { name: "mine", match: { resources: ["pods"] }, check() { return []; } };`
+	e, err := Load(nil, []Source{{Path: "mine.js", Code: mine}}, Options{Disabled: []string{"mine"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Tested(&TestFile{Check: "mine"}, false) {
+		t.Error("the test of a disabled user check runs")
+	}
+	if !e.Tested(&TestFile{Check: "typo"}, false) {
+		t.Error("the test of a check which does not exist must run and fail")
+	}
+}
+
 func TestCheckReplacingGlobalsCannotCrash(t *testing.T) {
 	e, err := Load(nil, []Source{
 		{Path: "evil.js", Code: `
@@ -440,5 +500,72 @@ export default { name: "evil", match: { resources: ["pods"] }, check() { return 
 	}
 	if len(res.Findings) != 4 {
 		t.Errorf("want 4 findings, got %+v", res.Findings)
+	}
+}
+
+func TestParseResourceIgnoresCase(t *testing.T) {
+	gr, err := ParseResource(" Deployments.Apps ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (schema.GroupResource{Group: "apps", Resource: "deployments"}); gr != want {
+		t.Errorf("got %v, want %v", gr, want)
+	}
+	if gr, _ := ParseResource("Secrets"); !Denied(gr) {
+		t.Error("Secrets must be denied")
+	}
+}
+
+func TestPartiallyListedTypes(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "partial",
+  match: { resources: ["pods"] },
+  reads: ["services"],
+  check(obj, ctx) {
+    switch (obj.metadata.name) {
+      case "same": ctx.get("services", "default", "s"); break;
+      case "listed": ctx.list("services", { namespace: "default" }); break;
+      case "owned": ctx.list("services", { owner: obj }); break;
+      case "other": ctx.get("services", "elsewhere", "s"); break;
+      case "no-namespace": ctx.get("services", null, "s"); break;
+      case "all": ctx.list("services"); break;
+      case "node-owner": ctx.list("services", { owner: { metadata: { uid: "n" } } }); break;
+      case "uid-owner": ctx.list("services", { owner: "some-uid" }); break;
+      case "caught":
+        try { ctx.list("services"); } catch (e) { return [{ message: "could not look" }]; }
+        break;
+    }
+    return [];
+  },
+});`)
+	snap := NewSnapshot([]Item{pod("same"), pod("listed"), pod("owned"), pod("other"), pod("all"), pod("node-owner"), pod("uid-owner"), pod("caught"), pod("no-namespace")},
+		[]schema.GroupVersionResource{podsGVR, servicesGVR})
+	snap.SetPartial(servicesGVR.GroupResource(), []string{"default"})
+	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := map[string]string{}
+	for _, f := range res.Failures {
+		if !f.Uncovered {
+			t.Errorf("%s: not marked uncovered", f.Object)
+		}
+		failed[f.Object] = f.Err.Error()
+	}
+	// A cluster-scoped owner or a bare UID says nothing about the namespace.
+	// No namespace: no object of a namespaced type matches, wherever it may
+	// be listed.
+	if len(failed) != 4 || failed["default/other"] == "" || failed["default/all"] == "" ||
+		failed["default/node-owner"] == "" || failed["default/uid-owner"] == "" {
+		t.Fatalf("failures: %v", failed)
+	}
+	// Not a problem of the cluster: no check-error finding.
+	if len(res.Findings) != 1 || res.Findings[0].Message != "could not look" {
+		t.Errorf("findings: %+v", res.Findings)
+	}
+	if want := `only listed in namespace default (not allowed to list it in namespace "elsewhere")`; !strings.Contains(failed["default/other"], want) {
+		t.Errorf("message %q", failed["default/other"])
 	}
 }

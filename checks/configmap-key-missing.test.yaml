@@ -21,6 +21,16 @@ cases:
     expect:
       - {key: cfg/b, message: ConfigMap cfg has no key b}
       - {key: gone/, message: ConfigMap gone does not exist}
+  - name: ephemeral container
+    resource: pods
+    available: [configmaps]
+    object:
+      metadata: {name: p, namespace: default}
+      spec:
+        containers: [{name: app}]
+        ephemeralContainers: [{name: debug, envFrom: [{configMapRef: {name: gone}}]}]
+    expect:
+      - {key: gone/, message: ConfigMap gone does not exist}
   - name: finished pod
     resource: pods
     available: [configmaps]

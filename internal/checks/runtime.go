@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -42,6 +43,9 @@ type jsRuntime struct {
 	snap    *Snapshot
 	hist    History
 	current *loadedCheck
+	// uncovered: the current call read objects which are not known (see
+	// mustCover).
+	uncovered bool
 	// Saved before any check code runs: a check may replace the globals.
 	freezeFn goja.Callable
 	dateCtor *goja.Object
@@ -172,6 +176,7 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 		if namespace != nil && !goja.IsUndefined(namespace) && !goja.IsNull(namespace) {
 			ns = namespace.String()
 		}
+		rt.mustCover(gr, ns, false)
 		obj := rt.snap.get(gr, ns, name)
 		if obj == nil {
 			return goja.Null()
@@ -180,7 +185,14 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	})
 	rt.set(ctx, "list", func(resource string, opts goja.Value) goja.Value {
 		gr := rt.readable(lc, resource)
-		objs := rt.snap.list(gr, rt.listOptions(opts))
+		o := rt.listOptions(opts)
+		if o.ownerNamespace != "" && !o.hasNamespace {
+			// Owned objects are in the namespace of their owner.
+			rt.mustCover(gr, o.ownerNamespace, false)
+		} else {
+			rt.mustCover(gr, o.namespace, !o.hasNamespace)
+		}
+		objs := rt.snap.list(gr, o)
 		vals := make([]any, 0, len(objs))
 		for _, o := range objs {
 			vals = append(vals, wrap(vm, o.Object))
@@ -246,6 +258,15 @@ func (rt *jsRuntime) resource(lc *loadedCheck, resource string) schema.GroupReso
 	return gr
 }
 
+// mustCover throws if the objects of a type in a namespace (all: in all
+// namespaces) are not known, and marks the call as uncovered.
+func (rt *jsRuntime) mustCover(gr schema.GroupResource, namespace string, all bool) {
+	if err := rt.snap.covers(gr, namespace, all); err != nil {
+		rt.uncovered = true
+		panic(rt.vm.NewTypeError(err.Error()))
+	}
+}
+
 // readable resolves a resource name and makes sure its objects are known.
 // A type which is not watched must not look like a type without objects.
 func (rt *jsRuntime) readable(lc *loadedCheck, resource string) schema.GroupResource {
@@ -275,6 +296,13 @@ func (rt *jsRuntime) listOptions(v goja.Value) listOptions {
 	}
 	if owner := obj.Get("owner"); owner != nil && !goja.IsUndefined(owner) && !goja.IsNull(owner) {
 		o.owner = uidOf(rt.vm, owner)
+		if s, ok := owner.Export().(string); !ok || s == "" {
+			if md := owner.ToObject(rt.vm).Get("metadata"); md != nil && !goja.IsUndefined(md) {
+				if ns := md.ToObject(rt.vm).Get("namespace"); ns != nil && !goja.IsUndefined(ns) && !goja.IsNull(ns) {
+					o.ownerNamespace = ns.String()
+				}
+			}
+		}
 	}
 	return o
 }
@@ -309,12 +337,14 @@ func (rt *jsRuntime) run(t task) taskResult {
 	rt.freeze(resource)
 	for _, d := range t.defs {
 		lc := rt.byName[d.Name]
+		rt.uncovered = false
 		findings, err := rt.call(lc, obj, resource, t.item)
 		res.calls++
 		if err != nil {
 			uid := string(t.item.Obj.GetUID())
 			res.failures = append(res.failures, Failure{
 				Check: d.Name, UID: uid, Object: t.item.Obj.GetNamespace() + "/" + t.item.Obj.GetName(), Err: err,
+				Uncovered: rt.uncovered,
 			})
 			continue
 		}
@@ -362,11 +392,24 @@ func (rt *jsRuntime) call(lc *loadedCheck, obj goja.Value, resource *goja.Object
 	return toFindings(lc.def, item, v)
 }
 
+// detailValue formats a value of details: objects and arrays as JSON (an
+// error for cycles), other values with fmt.
+func detailValue(v any) (string, error) {
+	switch t := v.(type) {
+	case string:
+		return t, nil
+	case map[string]any, []any, *roObject, *roArray:
+		b, err := json.Marshal(v)
+		return string(b), err
+	}
+	return fmt.Sprint(v), nil
+}
+
 func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return nil, nil
 	}
-	exported, ok := v.Export().([]any)
+	exported, ok := unwrap(v.Export()).([]any)
 	if !ok {
 		return nil, fmt.Errorf("check returned %s, want an array of findings", v.ExportType())
 	}
@@ -376,7 +419,7 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 	keys := map[string]struct{}{}
 	findings := make([]Finding, 0, len(exported))
 	for i, e := range exported {
-		m, ok := e.(map[string]any)
+		m, ok := unwrap(e).(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("finding %d is %T, want an object", i, e)
 		}
@@ -411,14 +454,17 @@ func toFindings(d *Definition, item Item, v goja.Value) ([]Finding, error) {
 			}
 		}
 		if dm, ok := m["details"]; ok && dm != nil {
-			mm, ok := dm.(map[string]any)
+			mm, ok := unwrap(dm).(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("finding %d: details must be an object", i)
 			}
 			f.Details = make(map[string]string, len(mm))
 			for k, v := range mm {
-				if v != nil {
-					f.Details[k] = fmt.Sprint(v)
+				if v == nil {
+					continue
+				}
+				if f.Details[k], err = detailValue(v); err != nil {
+					return nil, fmt.Errorf("finding %d: details.%s: %w", i, k, err)
 				}
 			}
 		}
@@ -446,6 +492,9 @@ func newFinding(d *Definition, item Item) Finding {
 func errorFindings(defs []*Definition, failures []Failure) []Finding {
 	byCheck := map[string][]Failure{}
 	for _, f := range failures {
+		if f.Uncovered {
+			continue
+		}
 		byCheck[f.Check] = append(byCheck[f.Check], f)
 	}
 	var findings []Finding

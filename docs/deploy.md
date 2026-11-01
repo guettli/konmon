@@ -1,0 +1,131 @@
+# Running konmon in a cluster
+
+[deploy/](../deploy/) has everything konmon needs, in the namespace `konmon`:
+
+To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
+
+- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
+- a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
+- a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
+- a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and these probes:
+  - startup and readiness on `/readyz`: OK only once konmon has evaluated, and while evaluations run. So a rollout is complete only when the new konmon really monitors, and a release which never evaluates leaves the Deployment unavailable (and fails a Flux or Argo CD health check) instead of looking healthy. The startup probe allows 10 minutes for discovery, the initial list of all resource types and the first evaluation, which runs as soon as the list is complete (`failureThreshold: 60`, `periodSeconds: 10`); raise it for a very big cluster.
+  - liveness on `/healthz`: fails when evaluations stop, so a restart lists everything again. Without a startup probe it is OK for the first 10 minutes before the first evaluation.
+
+For real use, pin a [release](https://github.com/guettli/konmon/releases) (the manifests and the image) and set the cluster name and Alertmanager in your own `kustomization.yaml`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - github.com/guettli/konmon/deploy?ref=vX.Y.Z # a release which contains deploy/
+images:
+  - name: ghcr.io/guettli/konmon
+    newTag: vX.Y.Z
+patches:
+  - target:
+      kind: Deployment
+      name: konmon
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --cluster-name=prod
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --alertmanager-url=http://alertmanager.monitoring.svc:9093
+configMapGenerator:
+  - name: konmon-config
+    namespace: konmon
+    behavior: replace
+    files:
+      - konmon.yaml # written with konmon triage
+```
+
+CI deploys these manifests on a kind cluster for every change ([hack/e2e.sh](../hack/e2e.sh)).
+
+To look at the history, run the commands inside the Pod (the image is distroless, `/konmon` is the only binary):
+
+```console
+kubectl -n konmon exec deploy/konmon -- /konmon findings --db /data/konmon.db --at 3h
+kubectl -n konmon exec deploy/konmon -- /konmon history --db /data/konmon.db -n kube-system pods/coredns-6799fbcd5-abcde
+```
+
+Triage on your machine, with the config you deployed, and put the result back into the ConfigMap: `konmon triage --context prod --config konmon.yaml`.
+
+## Important flags of `konmon run`
+
+| Flag | Default | |
+|---|---|---|
+| `--db` | `konmon.db` | SQLite database |
+| `--context` | current | kubeconfig context; in a Pod the in-cluster config is used |
+| `--for` | `2m` | how long a finding must be open before it fires |
+| `--eval-interval` | `30s` | time between two evaluations |
+| `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects); `0` keeps everything |
+| `--revisions` / `--no-revisions-for` | `true` / none | keep a gzip copy of every change, per resource type |
+| `--exclude-namespace` | none | globs, not stored and not checked |
+| `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |
+| `--checks` | none | directory with own checks, repeatable |
+| `--disable-check` | none | check names, globs |
+| `--check-param` | none | `check.param=value`, repeatable |
+| `--config` | none | config file with ignore rules (below), repeatable |
+| `--ignore-finding-regex` | none | drop findings; matched against `check resource namespace/name message`. Prefer `--config` |
+| `--alertmanager-url` | none | repeatable; without it konmon only records |
+| `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
+| `--cluster-name` | none | `cluster` label on all alerts |
+| `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness), [`/metrics`](#monitoring-konmon) |
+
+Parameters of the checks: see [Checks](checks.md#core-checks).
+
+## Alerts
+
+| Label | Value |
+|---|---|
+| `alertname` | `KonmonFinding` |
+| `check` | the check name, e.g. `conditions`; `check-error` if a check failed |
+| `severity` | from the check |
+| `category` | `health` (only health findings are sent) |
+| `cluster` | `--cluster-name` |
+| `group`, `resource`, `namespace`, `name` | the object |
+| `condition` | condition type(s), e.g. `Ready` or `Failed/FailureTarget` |
+| `container` | e.g. for `pod-container-restarts` |
+| `key` | the finding key, if there is no condition or container |
+
+Annotations: `summary` (the output line), `since`, and the finding's `details` (for `conditions`: `status`, `reason`, `message`).
+
+## Monitoring konmon
+
+A broken konmon cannot report that it is broken. `/metrics` (on `--listen`, Prometheus text format) lets something else do it:
+
+| Metric | |
+|---|---|
+| `konmon_evaluations_total` | counter of successful evaluations |
+| `konmon_last_evaluation_timestamp_seconds` | time of the last one; 0 before the first |
+| `konmon_evaluation_interval_seconds` | `--eval-interval` |
+| `konmon_start_time_seconds` | start of the process |
+| `konmon_build_info{version}` | always 1 |
+| `konmon_stale_resource_type_since_timestamp_seconds{resource}` | one series per watched type whose list and watch calls have failed for more than 2 minutes; the value is the time of the first failed call |
+
+Alert when konmon makes less than a third of the evaluations it should. The rate over 15 minutes also catches a konmon which evaluates once after each liveness restart and then stalls (about 0.1), which a check of the last timestamp misses. Sum per cluster: each pod is its own series, and after a rollout the old pod's series covers the start of the window. Expect it to fire about 20 minutes after konmon stopped evaluating normally (the old rate has to leave the window, then `for`). An evaluation which takes longer than the interval makes the next tick wait, so a konmon which needs 2 × `--eval-interval` per evaluation reads 0.5 and does not fire:
+
+```yaml
+- alert: KonmonNotEvaluating
+  expr: >-
+    sum by (cluster) (rate(konmon_evaluations_total[15m]))
+    * on (cluster) max by (cluster) (konmon_evaluation_interval_seconds)
+    < 0.3
+  for: 10m
+```
+
+A type which konmon may no longer read (RBAC changed after the start, a broken conversion webhook) does not stop the evaluations: konmon keeps evaluating its objects as they were at the last successful call, so their findings do not change any more. konmon logs `cannot list or watch resource, its objects are stale` and keeps retrying. Alert on it:
+
+```yaml
+- alert: KonmonStaleResourceType
+  expr: konmon_stale_resource_type_since_timestamp_seconds
+  for: 15m
+```
+
+Also alert when konmon is not scraped at all: not running, crash-looping before it serves, or not found by the scraper, for example `absent(up{job="konmon"}) or up{job="konmon"} == 0`. deploy/ has no Service or scrape annotation; point your scraper at the Pod's `http` port (8080), path `/metrics`.
+
+## Memory and disk
+
+The informers keep all watched objects in memory, without `managedFields`. A first test on a small cluster (1,264 objects, 138 types) produced a 10 MB database, of which 2 MB were compressed revisions. Most of the size is the latest version of every object. Revisions grow with the change rate of the cluster. Use `--no-revisions-for` for types that change often but whose history you don't need.
+
