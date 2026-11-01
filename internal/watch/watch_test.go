@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	watchapi "k8s.io/apimachinery/pkg/watch"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -104,6 +106,132 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 	}
 	if del, ok := next(t, events).(Delete); !ok || del.UID != "uid-a" {
 		t.Fatalf("want Delete of uid-a, got %#v", del)
+	}
+}
+
+func TestStaleWhenListAndWatchFailAfterTheStart(t *testing.T) {
+	scheme := runtime.NewScheme()
+	dyn := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{jobsGVR: "JobList"}, newJob("a", "uid-a"))
+	var (
+		mu        sync.Mutex
+		forbidden bool
+		watcher   *watchapi.FakeWatcher
+	)
+	denied := apierrors.NewForbidden(jobsGVR.GroupResource(), "", errors.New("RBAC changed"))
+	dyn.PrependReactor("list", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return forbidden, nil, denied
+	})
+	dyn.PrependWatchReactor("jobs", func(k8stesting.Action) (bool, watchapi.Interface, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if forbidden {
+			return true, nil, denied
+		}
+		watcher = watchapi.NewFake()
+		return true, watcher, nil
+	})
+	disc := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	disc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "batch/v1",
+		APIResources: []metav1.APIResource{{Name: "jobs", Namespaced: true, Kind: "Job", Verbs: []string{"list", "watch"}}},
+	}}
+	events := make(chan any, 100)
+	w := &Watcher{Dynamic: dyn, Discovery: disc, Events: events, Log: slog.New(slog.DiscardHandler), SyncTimeout: 200 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = w.Run(ctx, time.Hour) }()
+	for {
+		if _, ok := next(t, events).(Synced); ok {
+			break
+		}
+	}
+	if s := w.Stale(); len(s) != 0 {
+		t.Fatalf("Stale() = %v before any failed call", s)
+	}
+
+	// Access is lost: the watch ends, and the informer cannot list or
+	// watch again.
+	// The reflector opens the watch after the initial list.
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return watcher != nil })
+	mu.Lock()
+	forbidden = true
+	watcher.Stop()
+	mu.Unlock()
+	waitFor(t, func() bool { return len(w.Stale()) == 1 })
+	s := w.Stale()[0]
+	if s.GroupResource != jobsGVR.GroupResource() || !apierrors.IsForbidden(s.Err) || s.Since.IsZero() {
+		t.Errorf("Stale() = %+v", s)
+	}
+	if len(w.Snapshot()) != 1 {
+		t.Errorf("the objects of a stale type should stay, got %d", len(w.Snapshot()))
+	}
+
+	mu.Lock()
+	forbidden = false
+	mu.Unlock()
+	waitFor(t, func() bool { return len(w.Stale()) == 0 })
+}
+
+func TestStaleWhenTheInitialEventsOfAWatchListFail(t *testing.T) {
+	w := &Watcher{Log: slog.New(slog.DiscardHandler), SyncTimeout: time.Nanosecond}
+	ctx := t.Context()
+	failing := func(c *calls) bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.since.IsZero()
+	}
+	endBookmark := &unstructured.Unstructured{}
+	endBookmark.SetAnnotations(map[string]string{metav1.InitialEventsAnnotationKey: "true"})
+
+	// An Error event in the stream: failing, although the call succeeded.
+	c := &calls{}
+	fake := watchapi.NewFake()
+	wi := w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go fake.Error(&metav1.Status{Status: metav1.StatusFailure, Code: 500, Reason: metav1.StatusReasonInternalError, Message: "conversion webhook"})
+	<-wi.ResultChan()
+	waitFor(t, func() bool { return failing(c) })
+	wi.Stop()
+
+	// The stream ends before the bookmark at the end of the initial objects.
+	c = &calls{}
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go func() { fake.Add(newJob("a", "uid-a")); fake.Stop() }()
+	<-wi.ResultChan()
+	if _, open := <-wi.ResultChan(); open {
+		t.Fatal("the stream should end")
+	}
+	waitFor(t, func() bool { return failing(c) })
+
+	// All objects sent: the failure is cleared.
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	go func() { fake.Add(newJob("a", "uid-a")); fake.Action(watchapi.Bookmark, endBookmark) }()
+	<-wi.ResultChan()
+	<-wi.ResultChan()
+	waitFor(t, func() bool { return !failing(c) })
+
+	// Stopped by the reflector: not a failure.
+	c = &calls{}
+	fake = watchapi.NewFake()
+	wi = w.recordInitialEvents(ctx, jobsGVR, c, fake)
+	wi.Stop()
+	time.Sleep(50 * time.Millisecond)
+	if failing(c) {
+		t.Error("a watch stopped by the reflector counts as failure")
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); !cond(); {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

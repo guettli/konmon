@@ -285,7 +285,7 @@ func run(ctx context.Context) error {
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })
 	g.Go(func() error { return mon.Run(ctx, events) })
 	if runOpts.listen != "" {
-		srv := healthServer(runOpts.listen, mon, time.Now(), runOpts.evalInterval)
+		srv := healthServer(runOpts.listen, mon, watcher, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("listen %s: %w", runOpts.listen, err)
@@ -319,12 +319,12 @@ const startupGrace = 10 * time.Minute
 //     without a startup probe from killing a slow initial sync.
 //   - /metrics: Prometheus metrics, to alert from outside when konmon does
 //     not evaluate (konmon cannot report that about itself).
-func healthServer(addr string, ev evaluations, started time.Time, evalInterval time.Duration) *http.Server {
+func healthServer(addr string, ev evaluations, stale staleTypes, started time.Time, evalInterval time.Duration) *http.Server {
 	lastEvaluation := ev.LastEvaluation
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, ev, started, evalInterval)
+		writeMetrics(w, ev, stale, started, evalInterval)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		last := lastEvaluation()
@@ -346,9 +346,14 @@ type evaluations interface {
 	Evaluations() uint64
 }
 
+// staleTypes is what the health server needs of the watcher.
+type staleTypes interface {
+	Stale() []watch.StaleType
+}
+
 // writeMetrics writes the metrics in the Prometheus text format. A handful
 // of gauges and one counter: no need for a client library.
-func writeMetrics(w io.Writer, ev evaluations, started time.Time, evalInterval time.Duration) {
+func writeMetrics(w io.Writer, ev evaluations, stale staleTypes, started time.Time, evalInterval time.Duration) {
 	var lastSeconds float64
 	if last := ev.LastEvaluation(); !last.IsZero() {
 		lastSeconds = float64(last.UnixMilli()) / 1000
@@ -366,6 +371,18 @@ func writeMetrics(w io.Writer, ev evaluations, started time.Time, evalInterval t
 	for _, m := range metrics {
 		_, _ = fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s%s %s\n",
 			m.name, m.help, m.name, m.typ, m.name, m.labels, strconv.FormatFloat(m.value, 'f', -1, 64))
+	}
+	// One series per stale type, so an alert can name it.
+	_, _ = fmt.Fprint(w, "# HELP konmon_stale_resource_type_since_timestamp_seconds Watched resource types whose list and watch calls fail: "+
+		"their objects are out of date. The value is the time of the first failed call, Unix seconds.\n"+
+		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\n")
+	if stale == nil {
+		return
+	}
+	types := stale.Stale()
+	slices.SortFunc(types, func(a, b watch.StaleType) int { return strings.Compare(a.String(), b.String()) })
+	for _, t := range types {
+		_, _ = fmt.Fprintf(w, "konmon_stale_resource_type_since_timestamp_seconds{resource=\"%s\"} %d\n", labelValue(t.String()), t.Since.Unix())
 	}
 }
 
