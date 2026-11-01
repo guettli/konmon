@@ -320,17 +320,27 @@ func TestFindingsOfChecksWhichReadAPendingTypeStay(t *testing.T) {
 	if !found {
 		t.Error("the finding of a check which reads a pending type resolved")
 	}
-	// Stuck: the check reports what it can without the type.
+	// Stuck: the check cannot run for the job (not even ctx.has), so its
+	// finding stays, without a check-error finding.
 	src.pending[0].Stuck = true
 	if err := m.Evaluate(ctx, t0.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if open, _ = st.FindingsAt(ctx, t0.Add(2*time.Minute)); len(open) != 0 {
-		for _, r := range open {
-			if r.Finding.Check == "needs-services" && r.ResolvedAt.IsZero() {
-				t.Error("findings of a check which reads a stuck type are frozen")
-			}
+	open, err = st.FindingsAt(ctx, t0.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, r := range open {
+		if r.Finding.Check == checks.ErrorCheck {
+			t.Errorf("check-error finding for a stuck type: %+v", r.Finding)
 		}
+		if r.Finding.Check == "needs-services" && r.ResolvedAt.IsZero() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the finding of a check which reads a stuck type resolved")
 	}
 }
 

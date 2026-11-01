@@ -70,7 +70,9 @@ type Watcher struct {
 
 	mu        sync.Mutex
 	informers map[schema.GroupResource]*running
-	forbidden map[schema.GroupResource]struct{}
+	// skipped: types which may not be watched (probe failed), with the
+	// error of the last probe.
+	skipped map[schema.GroupResource]error
 	// discovered: a refresh went through all resource types. Before that,
 	// informers holds only the types started so far.
 	discovered bool
@@ -117,7 +119,7 @@ func (r *running) isSynced() bool {
 func (w *Watcher) Run(ctx context.Context, refresh time.Duration) error {
 	w.mu.Lock()
 	w.informers = map[schema.GroupResource]*running{}
-	w.forbidden = map[schema.GroupResource]struct{}{}
+	w.skipped = map[schema.GroupResource]error{}
 	w.discovered = false
 	w.ready = false
 	w.mu.Unlock()
@@ -236,6 +238,27 @@ func (w *Watcher) Stale() []StaleType {
 		if !since.IsZero() && now.Sub(since) >= w.syncTimeout() {
 			result = append(result, StaleType{GroupResource: r.gvr.GroupResource(), Since: since, Err: err})
 		}
+	}
+	return result
+}
+
+// SkippedType is a type which is not watched because the probe list call
+// failed: Forbidden (RBAC), NotFound or MethodNotSupported. Reason is the
+// Kubernetes status reason of the error.
+type SkippedType struct {
+	schema.GroupResource
+	Reason string
+	Err    error
+}
+
+// Skipped returns the types which are not watched because konmon may not
+// list them. The probe is tried again at every discovery.
+func (w *Watcher) Skipped() []SkippedType {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result := make([]SkippedType, 0, len(w.skipped))
+	for gr, err := range w.skipped {
+		result = append(result, SkippedType{GroupResource: gr, Reason: string(apierrors.ReasonForError(err)), Err: err})
 	}
 	return result
 }
@@ -487,6 +510,13 @@ func (w *Watcher) refresh(ctx context.Context) error {
 	}
 
 	w.mu.Lock()
+	if !partial {
+		for gr := range w.skipped {
+			if _, ok := wanted[gr]; !ok {
+				delete(w.skipped, gr) // the type is gone
+			}
+		}
+	}
 	var gone []schema.GroupVersionResource
 	for gr, r := range w.informers {
 		gvr, ok := wanted[gr]
@@ -533,8 +563,8 @@ func (w *Watcher) refresh(ctx context.Context) error {
 			if r, ok := w.informers[gvr.GroupResource()]; ok && r.informer == nil {
 				delete(w.informers, gvr.GroupResource()) // the placeholder of a version change
 			}
-			_, known := w.forbidden[gvr.GroupResource()]
-			w.forbidden[gvr.GroupResource()] = struct{}{}
+			_, known := w.skipped[gvr.GroupResource()]
+			w.skipped[gvr.GroupResource()] = err
 			w.mu.Unlock()
 			if !known {
 				w.Log.Warn("cannot watch resource, skipping", "resource", gvr.String(), "err", err)
@@ -678,7 +708,7 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 	r := &running{gvr: gvr, informer: informer, cancel: cancel, synced: make(chan struct{}), started: time.Now(), calls: c}
 	w.mu.Lock()
 	w.informers[gvr.GroupResource()] = r
-	delete(w.forbidden, gvr.GroupResource())
+	delete(w.skipped, gvr.GroupResource())
 	w.mu.Unlock()
 
 	w.Log.Debug("start watching", "resource", gvr.String())

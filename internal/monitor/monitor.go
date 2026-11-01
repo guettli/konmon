@@ -329,7 +329,9 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	}
 	// Objects of pending types are missing: findings of these types keep
 	// their state, and those of checks which read them, unless the type is
-	// stuck (then these checks report what they can without it).
+	// stuck. Then a check which reads it fails for the objects it checks
+	// (uncovered: no check-error finding), which keeps their findings, and
+	// reports what it can for the others.
 	pending := map[schema.GroupResource]struct{}{}
 	pendingChecks := map[string]struct{}{}
 	for _, p := range m.source.Pending() {
@@ -362,7 +364,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	// it. An aborted evaluation changes no findings, but the firing alerts
 	// are sent again, or Alertmanager would resolve them.
 	evalCtx, cancel := context.WithTimeout(ctx, 3*m.cfg.EvalInterval)
-	res, err := m.cfg.Checks.Evaluate(evalCtx, checks.NewSnapshot(items, m.source.Available()), hist, now)
+	snap := checks.NewSnapshot(items, m.source.Available())
+	for gr := range pending {
+		snap.SetPending(gr)
+	}
+	res, err := m.cfg.Checks.Evaluate(evalCtx, snap, hist, now)
 	cancel()
 	if err != nil {
 		nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
@@ -380,6 +386,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	failed := make(map[[2]string]struct{}, len(res.Failures))
 	for _, f := range res.Failures {
 		failed[[2]string{f.Check, f.UID}] = struct{}{}
+		if f.Uncovered {
+			// A type it reads is pending: the watcher logs that.
+			m.cfg.Log.Debug("check could not run", "check", f.Check, "uid", f.UID, "err", f.Err)
+			continue
+		}
 		m.cfg.Log.Warn("check failed", "check", f.Check, "uid", f.UID, "err", f.Err)
 	}
 	current := make([]checks.Finding, 0, len(res.Findings))

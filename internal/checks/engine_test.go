@@ -569,3 +569,41 @@ export default defineCheck({
 		t.Errorf("message %q", failed["default/other"])
 	}
 }
+
+func TestPendingTypes(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "pending",
+  match: { resources: ["pods"] },
+  reads: ["services", "configmaps"],
+  check(obj, ctx) {
+    switch (obj.metadata.name) {
+      case "has": return ctx.has("services") ? [] : [{ message: "no services" }];
+      case "get": ctx.get("services", "default", "s"); break;
+      case "other": return ctx.has("configmaps") ? [] : [{ message: "no configmaps" }];
+    }
+    return [];
+  },
+});`)
+	snap := NewSnapshot([]Item{pod("has"), pod("get"), pod("other")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetPending(servicesGVR.GroupResource())
+	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := map[string]string{}
+	for _, f := range res.Failures {
+		if !f.Uncovered {
+			t.Errorf("%s: not marked uncovered", f.Object)
+		}
+		failed[f.Object] = f.Err.Error()
+	}
+	if len(failed) != 2 || !strings.Contains(failed["default/has"], "resource services is not synced yet") || failed["default/get"] == "" {
+		t.Errorf("failures: %v", failed)
+	}
+	// A type which is not served (configmaps here) is still just absent.
+	if len(res.Findings) != 1 || res.Findings[0].Message != "no configmaps" {
+		t.Errorf("findings: %+v", res.Findings)
+	}
+}

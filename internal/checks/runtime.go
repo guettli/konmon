@@ -168,6 +168,7 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	rt.set(ctx, "params", wrap(vm, lc.def.Params))
 	rt.set(ctx, "has", func(resource string) bool {
 		gr := rt.resource(lc, resource)
+		rt.mustNotBePending(gr)
 		return rt.snap.Available(gr)
 	})
 	rt.set(ctx, "get", func(resource string, namespace goja.Value, name string) goja.Value {
@@ -267,10 +268,21 @@ func (rt *jsRuntime) mustCover(gr schema.GroupResource, namespace string, all bo
 	}
 }
 
+// mustNotBePending throws if the objects of a type are not known yet, and
+// marks the call as uncovered: neither "not served" nor "no objects" would
+// be the right answer.
+func (rt *jsRuntime) mustNotBePending(gr schema.GroupResource) {
+	if err := rt.snap.pendingErr(gr); err != nil {
+		rt.uncovered = true
+		panic(rt.vm.NewTypeError(err.Error()))
+	}
+}
+
 // readable resolves a resource name and makes sure its objects are known.
 // A type which is not watched must not look like a type without objects.
 func (rt *jsRuntime) readable(lc *loadedCheck, resource string) schema.GroupResource {
 	gr := rt.resource(lc, resource)
+	rt.mustNotBePending(gr)
 	if !rt.snap.Available(gr) {
 		panic(rt.vm.NewTypeError(fmt.Sprintf(
 			"resource %s is not available (not served by the cluster, forbidden, or not synced yet); use ctx.has() for optional types", resource)))

@@ -319,12 +319,12 @@ const startupGrace = 10 * time.Minute
 //     without a startup probe from killing a slow initial sync.
 //   - /metrics: Prometheus metrics, to alert from outside when konmon does
 //     not evaluate (konmon cannot report that about itself).
-func healthServer(addr string, ev evaluations, stale staleTypes, started time.Time, evalInterval time.Duration) *http.Server {
+func healthServer(addr string, ev evaluations, types watchedTypes, started time.Time, evalInterval time.Duration) *http.Server {
 	lastEvaluation := ev.LastEvaluation
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, ev, stale, started, evalInterval)
+		writeMetrics(w, ev, types, started, evalInterval)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		last := lastEvaluation()
@@ -346,14 +346,15 @@ type evaluations interface {
 	Evaluations() uint64
 }
 
-// staleTypes is what the health server needs of the watcher.
-type staleTypes interface {
+// watchedTypes is what the health server needs of the watcher.
+type watchedTypes interface {
 	Stale() []watch.StaleType
+	Skipped() []watch.SkippedType
 }
 
 // writeMetrics writes the metrics in the Prometheus text format. A handful
 // of gauges and one counter: no need for a client library.
-func writeMetrics(w io.Writer, ev evaluations, stale staleTypes, started time.Time, evalInterval time.Duration) {
+func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, started time.Time, evalInterval time.Duration) {
 	var lastSeconds float64
 	if last := ev.LastEvaluation(); !last.IsZero() {
 		lastSeconds = float64(last.UnixMilli()) / 1000
@@ -372,17 +373,28 @@ func writeMetrics(w io.Writer, ev evaluations, stale staleTypes, started time.Ti
 		_, _ = fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s%s %s\n",
 			m.name, m.help, m.name, m.typ, m.name, m.labels, strconv.FormatFloat(m.value, 'f', -1, 64))
 	}
-	// One series per stale type, so an alert can name it.
+	// One series per type, so an alert can name it.
 	_, _ = fmt.Fprint(w, "# HELP konmon_stale_resource_type_since_timestamp_seconds Watched resource types whose list and watch calls fail: "+
 		"their objects are out of date. The value is the time of the first failed call, Unix seconds.\n"+
 		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\n")
-	if stale == nil {
-		return
+	var stale []watch.StaleType
+	if types != nil {
+		stale = types.Stale()
 	}
-	types := stale.Stale()
-	slices.SortFunc(types, func(a, b watch.StaleType) int { return strings.Compare(a.String(), b.String()) })
-	for _, t := range types {
+	slices.SortFunc(stale, func(a, b watch.StaleType) int { return strings.Compare(a.String(), b.String()) })
+	for _, t := range stale {
 		_, _ = fmt.Fprintf(w, "konmon_stale_resource_type_since_timestamp_seconds{resource=\"%s\"} %d\n", labelValue(t.String()), t.Since.Unix())
+	}
+	_, _ = fmt.Fprint(w, "# HELP konmon_skipped_resource_type Resource types which are not watched because listing them failed "+
+		"(reason: Forbidden, NotFound, MethodNotAllowed). Tried again at every discovery. Always 1.\n"+
+		"# TYPE konmon_skipped_resource_type gauge\n")
+	var skipped []watch.SkippedType
+	if types != nil {
+		skipped = types.Skipped()
+	}
+	slices.SortFunc(skipped, func(a, b watch.SkippedType) int { return strings.Compare(a.String(), b.String()) })
+	for _, t := range skipped {
+		_, _ = fmt.Fprintf(w, "konmon_skipped_resource_type{resource=\"%s\",reason=\"%s\"} 1\n", labelValue(t.String()), labelValue(t.Reason))
 	}
 }
 
