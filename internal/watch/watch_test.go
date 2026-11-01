@@ -193,6 +193,7 @@ func TestStaleWhenTheInitialEventsOfAWatchListFail(t *testing.T) {
 	go fake.Error(&metav1.Status{Status: metav1.StatusFailure, Code: 500, Reason: metav1.StatusReasonInternalError, Message: "conversion webhook"})
 	<-wi.ResultChan()
 	waitFor(t, func() bool { return failing(c) })
+	wi.Stop()
 
 	// The stream ends before the bookmark at the end of the initial objects.
 	c = &calls{}
