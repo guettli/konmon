@@ -105,6 +105,8 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 	// findings are triaged; universe (not narrowed by -n) is what the
 	// counts of the ignore ladder are based on.
 	var findings, universe []*checks.Finding
+	// partial: some objects could not be listed, so the counts are too low.
+	partial := false
 	now := time.Now()
 	var st *store.Store
 	if triageFromDB || triageOpts.useDB {
@@ -116,7 +118,7 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 		defer func() { _ = st.Close() }()
 	}
 	if triageFromDB {
-		if err := triageOpts.filter.validate(); err != nil {
+		if err := triageOpts.validate(); err != nil {
 			stop()
 			return err
 		}
@@ -158,6 +160,14 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 			return err
 		}
 		findings, now = run.findings, run.now
+		l := describeListing(run.listed)
+		partial = l.partial()
+		for _, line := range l.notes(run.uncovered) {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+		}
+		for _, line := range l.notChecked {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Not checked: "+line)
+		}
 		for i := range run.result.Findings {
 			if f := &run.result.Findings[i]; run.ignore.ignored(f, now) == "" {
 				universe = append(universe, f)
@@ -182,7 +192,7 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 	t := &triageSession{
 		in: bufio.NewReader(cmd.InOrStdin()), out: cmd.OutOrStdout(),
 		editor: editor, base: base, all: findings, universe: universe, now: now, store: st, hist: hist, ctx: ctx,
-		narrowed: len(only) > 0 || len(triageOpts.filter.categories) > 0,
+		narrowed: len(only) > 0 || len(triageOpts.filter.categories) > 0, partial: partial,
 	}
 	if triageBaseline {
 		return t.baseline(triageBaselineUntil)
@@ -281,6 +291,9 @@ type triageSession struct {
 	universe []*checks.Finding
 	// narrowed: only some checks ran, the counts may be too low.
 	narrowed bool
+	// partial: some objects could not be listed (RBAC), the counts may be
+	// too low.
+	partial  bool
 	now      time.Time
 	store    *store.Store    // nil: no history
 	reported map[string]bool // resource types for which the report link was shown
@@ -586,6 +599,9 @@ func (t *triageSession) ignore(g *triageGroup) (bool, error) {
 	t.printf("  Ignore which findings?\n")
 	if t.narrowed {
 		t.printf("  (counts include only the checks of this run)\n")
+	}
+	if t.partial {
+		t.printf("  (counts include only the objects konmon was allowed to list)\n")
 	}
 	for i, r := range rungs {
 		extra := ""
