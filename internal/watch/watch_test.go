@@ -225,6 +225,73 @@ func TestStaleWhenTheInitialEventsOfAWatchListFail(t *testing.T) {
 	}
 }
 
+func TestSkippedTypes(t *testing.T) {
+	scheme := runtime.NewScheme()
+	dyn := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{jobsGVR: "JobList", cronJobsGVR: "CronJobList"})
+	var (
+		mu      sync.Mutex
+		allowed bool
+	)
+	dyn.PrependReactor("list", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return !allowed, nil, apierrors.NewForbidden(jobsGVR.GroupResource(), "", errors.New("RBAC"))
+	})
+	dyn.PrependReactor("list", "cronjobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(cronJobsGVR.GroupResource(), "", errors.New("RBAC"))
+	})
+	disc := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	setResources := func(names ...string) {
+		rs := make([]metav1.APIResource, 0, len(names))
+		for _, n := range names {
+			rs = append(rs, metav1.APIResource{Name: n, Namespaced: true, Verbs: []string{"list", "watch"}})
+		}
+		disc.Resources = []*metav1.APIResourceList{{GroupVersion: "batch/v1", APIResources: rs}}
+	}
+	setResources("jobs", "cronjobs")
+	w := &Watcher{
+		Dynamic: dyn, Discovery: disc, Events: make(chan any, 100), Log: slog.New(slog.DiscardHandler),
+		informers: map[schema.GroupResource]*running{}, skipped: map[schema.GroupResource]error{},
+	}
+	ctx := t.Context()
+	skipped := func() []string {
+		types := w.Skipped()
+		names := make([]string, 0, len(types))
+		for _, s := range types {
+			names = append(names, s.String()+" "+s.Reason)
+		}
+		slices.Sort(names)
+		return names
+	}
+	if err := w.refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := skipped(); !slices.Equal(got, []string{"cronjobs.batch Forbidden", "jobs.batch Forbidden"}) {
+		t.Fatalf("Skipped() = %v", got)
+	}
+
+	// Allowed now: watched at the next discovery.
+	mu.Lock()
+	allowed = true
+	mu.Unlock()
+	if err := w.refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := skipped(); !slices.Equal(got, []string{"cronjobs.batch Forbidden"}) {
+		t.Errorf("Skipped() = %v", got)
+	}
+
+	// The type is gone (CRD deleted): not skipped any more.
+	setResources("jobs")
+	if err := w.refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := skipped(); len(got) != 0 {
+		t.Errorf("Skipped() = %v", got)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(30 * time.Second); !cond(); {
@@ -254,7 +321,7 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	widgets := schema.GroupResource{Group: "example.com", Resource: "widgets"}
-	stuck := &running{gvr: widgets.WithVersion("v1"), synced: make(chan struct{}), started: time.Now()}
+	stuck := &running{gvr: widgets.WithVersion("v1"), synced: make(chan struct{}), started: time.Now(), calls: &calls{}}
 	w := &Watcher{
 		Log: slog.New(slog.DiscardHandler), SyncTimeout: time.Minute, discovered: true,
 		informers: map[schema.GroupResource]*running{jobsGVR.GroupResource(): {gvr: jobsGVR, synced: done}, widgets: stuck},
@@ -268,6 +335,10 @@ func TestSyncedGivesUpOnAnInformerWhichDoesNotSync(t *testing.T) {
 	}
 	if p := w.Pending(); len(p) != 1 || p[0].GroupResource != widgets || !p[0].Stuck {
 		t.Errorf("Pending() = %v", p)
+	}
+	// Also stale, although no call failed: its findings are frozen.
+	if st := w.Stale(); len(st) != 1 || st[0].GroupResource != widgets || !st[0].Since.Equal(stuck.started) {
+		t.Errorf("Stale() = %v", st)
 	}
 	// A type started later does not block evaluations again.
 	w.informers[widgets] = &running{gvr: widgets.WithVersion("v2"), synced: make(chan struct{}), started: time.Now()}

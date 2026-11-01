@@ -26,6 +26,8 @@ type Snapshot struct {
 	byOwner   map[string][]ownedItem
 	// partial types were only listed in these namespaces.
 	partial map[schema.GroupResource][]string
+	// pending types are watched, but their objects are not known yet.
+	pending map[schema.GroupResource]struct{}
 }
 
 type nameKey struct {
@@ -84,6 +86,24 @@ func (s *Snapshot) Items() []Item { return s.items }
 func (s *Snapshot) Available(gr schema.GroupResource) bool {
 	_, ok := s.available[gr]
 	return ok
+}
+
+// SetPending marks a watched type whose objects are not known yet (its
+// first list has not finished): checks which read it, also through
+// ctx.has, cannot run for now. That is not a finding of the checked object.
+func (s *Snapshot) SetPending(gr schema.GroupResource) {
+	if s.pending == nil {
+		s.pending = map[schema.GroupResource]struct{}{}
+	}
+	s.pending[gr] = struct{}{}
+}
+
+// pendingErr returns an error if the type is pending (see SetPending).
+func (s *Snapshot) pendingErr(gr schema.GroupResource) error {
+	if _, ok := s.pending[gr]; ok && !s.Available(gr) {
+		return fmt.Errorf("resource %s is not synced yet", FormatResource(gr))
+	}
+	return nil
 }
 
 // SetPartial marks a type whose objects were only listed in some

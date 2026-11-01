@@ -49,8 +49,11 @@ func TestHealthServer(t *testing.T) {
 
 func TestMetrics(t *testing.T) {
 	last := time.UnixMilli(1_800_000_000_500)
-	stale := fakeStale{{GroupResource: schema.GroupResource{Group: "example.com", Resource: "widgets"}, Since: time.Unix(1_799_999_500, 0)}}
-	srv := healthServer("", fakeEvaluations{last: last, n: 42}, stale, time.Unix(1_799_999_000, 0), 30*time.Second)
+	types := fakeTypes{
+		stale:   []watch.StaleType{{GroupResource: schema.GroupResource{Group: "example.com", Resource: "widgets"}, Since: time.Unix(1_799_999_500, 0)}},
+		skipped: []watch.SkippedType{{GroupResource: schema.GroupResource{Resource: "secrets"}, Reason: "Forbidden"}},
+	}
+	srv := healthServer("", fakeEvaluations{last: last, n: 42}, types, time.Unix(1_799_999_000, 0), 30*time.Second)
 	rec := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
@@ -63,6 +66,7 @@ func TestMetrics(t *testing.T) {
 		"\nkonmon_start_time_seconds 1799999000\n",
 		"\nkonmon_build_info{version=\"dev\"} 1\n",
 		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\nkonmon_stale_resource_type_since_timestamp_seconds{resource=\"widgets.example.com\"} 1799999500\n",
+		"# TYPE konmon_skipped_resource_type gauge\nkonmon_skipped_resource_type{resource=\"secrets\",reason=\"Forbidden\"} 1\n",
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("missing %q in\n%s", want, rec.Body)
@@ -70,19 +74,24 @@ func TestMetrics(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	srv = healthServer("", fakeEvaluations{}, fakeStale{}, time.Now(), 30*time.Second)
+	srv = healthServer("", fakeEvaluations{}, fakeTypes{}, time.Now(), 30*time.Second)
 	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	if !strings.Contains(rec.Body.String(), "\nkonmon_last_evaluation_timestamp_seconds 0\n") {
 		t.Errorf("before the first evaluation the timestamp should be 0:\n%s", rec.Body)
 	}
-	if !strings.HasSuffix(rec.Body.String(), "# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\n") {
-		t.Errorf("no stale types: want no konmon_stale_resource_type_since_timestamp_seconds series:\n%s", rec.Body)
+	if strings.Contains(rec.Body.String(), "konmon_stale_resource_type_since_timestamp_seconds{") ||
+		!strings.HasSuffix(rec.Body.String(), "# TYPE konmon_skipped_resource_type gauge\n") {
+		t.Errorf("no stale or skipped types: want no series of them:\n%s", rec.Body)
 	}
 }
 
-type fakeStale []watch.StaleType
+type fakeTypes struct {
+	stale   []watch.StaleType
+	skipped []watch.SkippedType
+}
 
-func (f fakeStale) Stale() []watch.StaleType { return f }
+func (f fakeTypes) Stale() []watch.StaleType     { return f.stale }
+func (f fakeTypes) Skipped() []watch.SkippedType { return f.skipped }
 
 func TestLabelValue(t *testing.T) {
 	if got, want := labelValue("a\\b\"c\nd"), `a\\b\"c\nd`; got != want {

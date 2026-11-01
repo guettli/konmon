@@ -569,3 +569,65 @@ export default defineCheck({
 		t.Errorf("message %q", failed["default/other"])
 	}
 }
+
+func TestPendingTypes(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "pending",
+  match: { resources: ["pods"] },
+  reads: ["services", "configmaps"],
+  check(obj, ctx) {
+    switch (obj.metadata.name) {
+      case "has": return ctx.has("services") ? [] : [{ message: "no services" }];
+      case "get": ctx.get("services", "default", "s"); break;
+      case "other": return ctx.has("configmaps") ? [] : [{ message: "no configmaps" }];
+      case "caught":
+        try { ctx.get("services", "default", "s"); } catch (e) {}
+        throw new Error("a bug");
+      case "caught-ok":
+        try { ctx.get("services", "default", "s"); } catch (e) {}
+        return [];
+    }
+    return [];
+  },
+});`)
+	snap := NewSnapshot([]Item{pod("has"), pod("get"), pod("other"), pod("caught"), pod("caught-ok")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetPending(servicesGVR.GroupResource())
+	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := map[string]Failure{}
+	for _, f := range res.Failures {
+		failed[f.Object] = f
+	}
+	// ctx.has: false, the findings are reported, and the failure keeps the
+	// previous ones. Strict reads throw.
+	if f := failed["default/has"]; !f.Uncovered || !strings.Contains(f.Err.Error(), "resource services is not synced yet") {
+		t.Errorf("has: %+v", f)
+	}
+	if f := failed["default/get"]; !f.Uncovered || f.Err == nil {
+		t.Errorf("get: %+v", f)
+	}
+	// A pending read which the check caught does not hide its own error.
+	if f := failed["default/caught"]; f.Uncovered || !strings.Contains(f.Err.Error(), "a bug") {
+		t.Errorf("caught: %+v", f)
+	}
+	// Caught and returned normally: the previous findings are kept.
+	if f := failed["default/caught-ok"]; !f.Uncovered || f.Err == nil {
+		t.Errorf("caught-ok: %+v", f)
+	}
+	if len(failed) != 4 {
+		t.Errorf("failures: %v", failed)
+	}
+	got := map[string]bool{}
+	for _, f := range res.Findings {
+		got[f.Check+" "+f.Message] = true
+	}
+	// A type which is not served (configmaps here) is just absent. The
+	// caught case is a real check-error.
+	if len(res.Findings) != 3 || !got["pending no services"] || !got["pending no configmaps"] {
+		t.Errorf("findings: %v", got)
+	}
+}
