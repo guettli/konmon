@@ -1,8 +1,10 @@
 // Renovate config. Renovate runs self-hosted from guettli/gitops
 // (.github/workflows/renovate.yml lists this repo in RENOVATE_REPOSITORIES),
-// as guettlibot. It replaces Dependabot with the same coverage and cadence:
-// Go modules (go.mod and tools/go.mod), npm (package.json) and GitHub Actions
-// (pinned by commit SHA), weekly, grouped, 14 days after a release.
+// in a job of its own (no commands allowed). It replaced Dependabot with the
+// same cadence: weekly, grouped, 14 days after a release. Coverage: Go modules
+// (go.mod and tools/go.mod, including pseudo-version digests), npm
+// (package.json), GitHub Actions (pinned by commit SHA) and the Node version of
+// setup-node, the Dockerfile base image, and patch releases of the Go toolchain.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
@@ -13,6 +15,15 @@
   prConcurrentLimit: 5,
   postUpdateOptions: ["gomodTidy"],
   packageRules: [
+    {
+      // The toolchain line follows Go patch releases (security fixes) on its
+      // own; moving to a new Go minor stays a deliberate change, together with
+      // the go line.
+      matchManagers: ["gomod"],
+      matchDepTypes: ["toolchain"],
+      matchUpdateTypes: ["major", "minor"],
+      enabled: false,
+    },
     {
       matchManagers: ["gomod"],
       matchPackageNames: ["k8s.io/**", "sigs.k8s.io/**"],
