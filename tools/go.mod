@@ -1,5 +1,5 @@
 // Versions of the Go tools of CI and the Makefile (go tool -modfile=tools/go.mod),
-// so Dependabot updates them.
+// so Renovate updates them.
 module github.com/guettli/konmon/tools
 
 go 1.26.0

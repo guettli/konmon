@@ -40,6 +40,6 @@ The core `conditions` check is a port of check-conditions. `internal/checks/corp
 
 ## CI and releases
 
-CI runs on pull requests and on main: tests with the race detector and coverage, the check tests, a build of every release target, lint (golangci-lint, actionlint, govulncheck, `go mod tidy`, shellcheck, generated docs up to date), a type check and formatting check of the TypeScript checks, an image build, and the end-to-end test on kind. Actions are pinned by commit; Dependabot updates them and the Go modules weekly.
+CI runs on pull requests and on main: tests with the race detector and coverage, the check tests, a build of every release target, lint (golangci-lint, actionlint, govulncheck, `go mod tidy`, shellcheck, generated docs up to date), a type check and formatting check of the TypeScript checks, an image build, and the end-to-end test on kind. Actions are pinned by commit; Renovate updates them, the Go modules and the npm tools weekly (`renovate.json5`).
 
 After CI succeeds on `main`, the release workflow bumps the patch version, creates a GitHub release with binaries and pushes the image `ghcr.io/guettli/konmon:<version>` (and `:latest`).
