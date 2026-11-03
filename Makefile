@@ -1,5 +1,5 @@
 # The checks of CI. `make check` before a pull request.
-# Tool versions: tools/go.mod and package.json (updated by Dependabot).
+# Tool versions: tools/go.mod and package.json (updated by Renovate).
 GO_TOOL := go tool -modfile=tools/go.mod
 GOLANGCI_LINT := $(GO_TOOL) golangci-lint
 ACTIONLINT := $(GO_TOOL) actionlint

@@ -1,0 +1,41 @@
+// Renovate config. Renovate runs self-hosted from guettli/gitops
+// (.github/workflows/renovate.yml lists this repo in RENOVATE_REPOSITORIES),
+// as guettlibot. It replaces Dependabot with the same coverage and cadence:
+// Go modules (go.mod and tools/go.mod), npm (package.json) and GitHub Actions
+// (pinned by commit SHA), weekly, grouped, 14 days after a release.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended", "helpers:pinGitHubActionDigests"],
+  timezone: "Europe/Berlin",
+  schedule: ["before 6am on monday"],
+  // Dependabot's cooldown.default-days: 14.
+  minimumReleaseAge: "14 days",
+  prConcurrentLimit: 5,
+  postUpdateOptions: ["gomodTidy"],
+  packageRules: [
+    {
+      matchManagers: ["gomod"],
+      matchPackageNames: ["k8s.io/**", "sigs.k8s.io/**"],
+      groupName: "kubernetes",
+    },
+    {
+      matchManagers: ["gomod"],
+      matchPackageNames: ["golang.org/x/**"],
+      groupName: "golang.org/x",
+    },
+    {
+      // The tools of CI and the Makefile (go tool -modfile=tools/go.mod).
+      matchManagers: ["gomod"],
+      matchFileNames: ["tools/go.mod"],
+      groupName: "tools",
+    },
+    {
+      matchManagers: ["npm"],
+      groupName: "npm",
+    },
+    {
+      matchManagers: ["github-actions"],
+      groupName: "actions",
+    },
+  ],
+}
