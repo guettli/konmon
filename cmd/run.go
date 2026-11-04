@@ -260,6 +260,7 @@ func run(ctx context.Context) error {
 	mon := monitor.New(monitor.Config{
 		Checks:            engine,
 		Ignore:            ignore.ignored,
+		Escalate:          ignore.escalated,
 		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,

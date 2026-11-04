@@ -31,6 +31,24 @@ conditions:
 
 Unlike an ignore rule, a taught condition is still reported when it has its bad status, or a status other than `True`/`False` (e.g. `Unknown`; use `ignoreTypes` for types whose status is something else, like `Accepted`). The rules of the resource are looked at before `"*"`. Taught polarity wins over the built-in polarity tables of `checks/conditions.ts`; its list of known healthy states (specific reasons) still applies. If you replace `conditions.ts` with your own check, it gets the section as param `rules`. `konmon findings --config` applies only `ignore` rules, not `conditions` (stored findings are not evaluated again). If the CRD is public, please tell us (see [Improve konmon](../README.md#improve-konmon)) so everybody gets it.
 
+## Escalating findings which stay
+
+A warning which nobody fixes for an hour is not a warning any more: a database which crash-loops since the last reboot hides in a mail with a dozen other warnings. `escalate` rules raise the severity of a finding once it is open for `after`, so Alertmanager can route it differently (e.g. `severity="critical"` to a pager or a shorter `repeat_interval`):
+
+```yaml
+escalate:
+  - after: 1h                       # required; a rule without match fields matches every finding
+    comment: nothing stays broken for an hour   # optional
+  - check: pod-container-restarts   # the match fields of an ignore rule
+    namespace: prod-*
+    after: 15m
+  - namespace: dev-*
+    after: 30m
+    severity: warning               # critical (default) or warning
+```
+
+The time counts from when konmon first saw the finding, not from when it fired. Rules are matched against the finding of each evaluation: prefer fields which do not change while the finding is open (`check`, `resource`, `namespace`, `name`, `condition`). A `message` which changes (`pod-container-restarts` says `CrashLoopBackOff` while the container waits and `not ready` while it runs) makes the severity, and so the alert, flip. A rule never lowers a severity; of several matching rules the highest severity wins. A rule without match fields does not escalate failing checks (`check-error`); name `check: check-error` for that. Escalation changes the `severity` label of the alert: Alertmanager sees a new alert, and the one with the old severity is resolved. It applies to the alerts of `konmon run` only: `konmon check` and `konmon findings` show the severity of the check. `konmon run` logs `finding escalated` with the rule.
+
 ## Interactive: `konmon triage`
 
 You don't have to write the file by hand. `konmon triage` walks through the open findings, grouped by pattern ("Stalled=True Waiting on 12 widgets"), and writes your answers to the config file (the last `--config`, created if missing, comments kept), after each decision:
