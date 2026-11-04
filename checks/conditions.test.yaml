@@ -313,3 +313,116 @@ cases:
         conditions:
           - {type: Unused, status: "False", reason: PodUsingPVC, message: A pod is currently referencing this PVC}
     expect: []
+
+  - name: healthy Longhorn node
+    resource: nodes.longhorn.io
+    object:
+      metadata: {name: n1, namespace: longhorn-system}
+      status:
+        conditions:
+          - {type: KernelModulesLoaded, status: "True", reason: KernelModulesLoaded}
+          - {type: Multipathd, status: "True"}
+          - {type: MountPropagation, status: "True"}
+          - {type: RequiredPackages, status: "True"}
+          - {type: Schedulable, status: "True"}
+          - {type: Ready, status: "True"}
+    expect: []
+
+  - name: Longhorn node with multipathd running
+    resource: nodes.longhorn.io
+    object:
+      metadata: {name: n1, namespace: longhorn-system}
+      status:
+        conditions:
+          - {type: Multipathd, status: "False", reason: MultipathdIsRunning, message: multipathd is running with a known issue}
+          - {type: Schedulable, status: "True"}
+    expect:
+      - key: Multipathd
+        condition: Multipathd
+        message: 'Condition Multipathd=False MultipathdIsRunning "multipathd is running with a known issue"'
+        details: {status: "False", reason: MultipathdIsRunning, message: multipathd is running with a known issue}
+
+  - name: healthy system-upgrade-controller plan
+    resource: plans.upgrade.cattle.io
+    object:
+      metadata: {name: k3s-server, namespace: system-upgrade}
+      status:
+        conditions:
+          - {type: LatestResolved, status: "True", reason: Version}
+          - {type: Validated, status: "True"}
+    expect: []
+
+  - name: plan which does not validate
+    resource: plans.upgrade.cattle.io
+    object:
+      metadata: {name: k3s-server, namespace: system-upgrade}
+      status:
+        conditions:
+          - {type: LatestResolved, status: "False", reason: Error, message: "no release found"}
+          - {type: Validated, status: "False", reason: Error, message: "spec.concurrency must be greater than 0"}
+    expect:
+      - {key: LatestResolved, condition: LatestResolved}
+      - {key: Validated, condition: Validated}
+
+  - name: finished Keycloak realm import
+    resource: keycloakrealmimports.k8s.keycloak.org
+    object:
+      metadata: {name: realm, namespace: keycloak}
+      status:
+        conditions:
+          - {type: Done, status: "True"}
+          - {type: Started, status: "False"}
+          - {type: HasErrors, status: "False"}
+    expect: []
+
+  - name: failed Keycloak realm import
+    resource: keycloakrealmimports.k8s.keycloak.org
+    object:
+      metadata: {name: realm, namespace: keycloak}
+      status:
+        conditions:
+          - {type: Done, status: "False", message: import job did not finish}
+          - {type: Started, status: "True", message: import job is running}
+          - {type: HasErrors, status: "True", message: "import job failed: 1 error"}
+    expect:
+      - {key: Done, condition: Done}
+      - {key: Started, condition: Started}
+      - key: HasErrors
+        condition: HasErrors
+        message: 'Condition HasErrors=True  "import job failed: 1 error"'
+        details: {status: "True", reason: "", message: "import job failed: 1 error"}
+
+  - name: healthy Keycloak
+    resource: keycloaks.k8s.keycloak.org
+    object:
+      metadata: {name: kc, namespace: keycloak}
+      status:
+        conditions:
+          - {type: Ready, status: "True"}
+          - {type: HasErrors, status: "False"}
+          - {type: RollingUpdate, status: "False"}
+    expect: []
+
+  - name: Keycloak during a rolling update
+    resource: keycloaks.k8s.keycloak.org
+    object:
+      metadata: {name: kc, namespace: keycloak}
+      status:
+        conditions:
+          - {type: Ready, status: "True"}
+          - {type: HasErrors, status: "False"}
+          - {type: RollingUpdate, status: "True", message: Rolling out deployment update}
+    expect:
+      - key: RollingUpdate
+        condition: RollingUpdate
+        message: 'Condition RollingUpdate=True  "Rolling out deployment update"'
+        details: {status: "True", reason: "", message: Rolling out deployment update}
+
+  - name: healthy ExternalSecret
+    resource: externalsecrets.external-secrets.io
+    object:
+      metadata: {name: creds, namespace: default}
+      status:
+        conditions:
+          - {type: Ready, status: "True", reason: SecretSynced, message: secret synced}
+    expect: []

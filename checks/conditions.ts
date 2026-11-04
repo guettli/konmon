@@ -42,11 +42,14 @@ const positiveByResource: Record<string, string[]> = {
     "MountPropagation", // Longhorn
     "RequiredPackages", // Longhorn
     "KernelModulesLoaded", // Longhorn
+    "Multipathd", // Longhorn
     "EtcdIsVoter",
   ],
   machines: ["NodeKubeadmLabelsAndTaintsSet"],
   autopilotclusters: ["ClusterRunning"],
   applicationsets: ["ParametersGenerated"],
+  plans: ["LatestResolved", "Validated"], // upgrade.cattle.io (system-upgrade-controller)
+  keycloakrealmimports: ["Done"], // k8s.keycloak.org
 };
 
 // True is healthy for any resource. Matched exactly.
@@ -105,6 +108,7 @@ const positivePrefixes = ["Created"];
 // False is healthy for any resource. Matched exactly.
 const negativeAnyResource = [
   "Error", // an Error condition is only interesting when not False
+  "HasErrors", // True means errors (e.g. k8s.keycloak.org)
   "Suspended", // e.g. agents.x-k8s.io sandboxes; added after the port from check-conditions
 ];
 
@@ -144,6 +148,8 @@ const negativeByResource: Record<string, string[]> = {
   machinesets: ["ScalingDown", "ScalingUp", "Remediating"],
   machines: ["Updating"],
   applicationsets: ["ErrorOccurred"],
+  keycloaks: ["RollingUpdate"], // k8s.keycloak.org
+  keycloakrealmimports: ["Started"], // k8s.keycloak.org: False once the import finished
 };
 
 const negativeSuffixes = [
