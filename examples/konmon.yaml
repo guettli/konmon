@@ -30,3 +30,13 @@ conditions:
     healthyWhenTrue: [Synced]
     healthyWhenFalse: [Stalled, Degraded]
     ignoreTypes: [LastSyncAttempted]
+
+# Raise the severity of findings which stay open: route severity="critical"
+# in Alertmanager to something which gets noticed.
+escalate:
+  - check: pod-container-restarts
+    message: CrashLoopBackOff
+    after: 15m
+    comment: A crash-looping container is not fixed by waiting.
+  - after: 1h
+    comment: Nothing should stay broken for an hour.

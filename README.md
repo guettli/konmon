@@ -76,7 +76,7 @@ In a cluster: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'` to 
 
 - [Using konmon](docs/usage.md): `check`, `findings`, `history`, the database
 - [Checks](docs/checks.md): the core checks, and how to write your own in TypeScript
-- [Ignoring findings](docs/config.md): the config file, teaching condition polarity, `konmon triage`
+- [Ignoring findings](docs/config.md): the config file, teaching condition polarity, escalating findings which stay, `konmon triage`
 - [Running in a cluster](docs/deploy.md): manifests, flags, alerts, memory
 - [CLI reference](docs/cli/konmon.md) (generated)
 - [Contributing](CONTRIBUTING.md)

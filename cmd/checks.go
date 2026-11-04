@@ -166,6 +166,17 @@ func (ig *ignorer) ignored(f *checks.Finding, now time.Time) string {
 	return ""
 }
 
+// escalated returns the severity of a finding which is open for openFor
+// by the escalate rules, with the after and the source of the rule which
+// raised it ("" if none).
+func (ig *ignorer) escalated(f *checks.Finding, openFor time.Duration, now time.Time) (string, time.Duration, string) {
+	sev, r := ig.config.Escalated(f, openFor, now)
+	if r == nil {
+		return sev, 0, ""
+	}
+	return sev, r.AfterDuration(), r.Source
+}
+
 // warnExpired logs the rules which do not match any more, each once.
 func (ig *ignorer) warnExpired(log *slog.Logger, now time.Time) {
 	if ig.warned == nil {
