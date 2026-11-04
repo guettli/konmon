@@ -39,15 +39,15 @@ A warning which nobody fixes for an hour is not a warning any more: a database w
 escalate:
   - after: 1h                       # required; a rule without match fields matches every finding
     comment: nothing stays broken for an hour   # optional
-  - check: pod-container-restarts
-    message: CrashLoopBackOff       # the match fields of an ignore rule
+  - check: pod-container-restarts   # the match fields of an ignore rule
+    namespace: prod-*
     after: 15m
   - namespace: dev-*
     after: 30m
     severity: warning               # critical (default) or warning
 ```
 
-The time counts from when konmon first saw the finding, not from when it fired. A rule never lowers a severity; of several matching rules the highest severity wins. A rule without match fields does not escalate failing checks (`check-error`); name `check: check-error` for that. Escalation changes the `severity` label of the alert: Alertmanager sees a new alert, and the one with the old severity is resolved. It applies to the alerts of `konmon run` only: `konmon check` and `konmon findings` show the severity of the check. `konmon run` logs `finding escalated` with the rule.
+The time counts from when konmon first saw the finding, not from when it fired. Rules are matched against the finding of each evaluation: prefer fields which do not change while the finding is open (`check`, `resource`, `namespace`, `name`, `condition`). A `message` which changes (`pod-container-restarts` says `CrashLoopBackOff` while the container waits and `not ready` while it runs) makes the severity, and so the alert, flip. A rule never lowers a severity; of several matching rules the highest severity wins. A rule without match fields does not escalate failing checks (`check-error`); name `check: check-error` for that. Escalation changes the `severity` label of the alert: Alertmanager sees a new alert, and the one with the old severity is resolved. It applies to the alerts of `konmon run` only: `konmon check` and `konmon findings` show the severity of the check. `konmon run` logs `finding escalated` with the rule.
 
 ## Interactive: `konmon triage`
 

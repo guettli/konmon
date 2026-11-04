@@ -35,7 +35,6 @@ conditions:
 # in Alertmanager to something which gets noticed.
 escalate:
   - check: pod-container-restarts
-    message: CrashLoopBackOff
     after: 15m
     comment: A crash-looping container is not fixed by waiting.
   - after: 1h

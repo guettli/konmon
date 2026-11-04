@@ -12,7 +12,9 @@ import (
 // EscalateRule raises the severity of the findings it matches once they are
 // open for After: a warning which nobody fixed for an hour is not a warning
 // any more. The match fields are those of an ignore rule; a rule without
-// any of them matches every finding.
+// any of them matches every finding. Rules are matched against the finding
+// of each evaluation, so a field which changes while the finding is open
+// (a message) makes the severity flip.
 type EscalateRule struct {
 	Check     string `yaml:"check,omitempty"`
 	Resource  string `yaml:"resource,omitempty"`
