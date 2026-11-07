@@ -28,6 +28,7 @@ type checkFlags struct {
 	cfg               *config.Config // loaded from configs
 	dirs              []string
 	disabled          []string
+	enabled           []string
 	params            []string
 	ignoreFindings    []string
 	excludeNamespaces []string
@@ -38,7 +39,8 @@ type checkFlags struct {
 func (c *checkFlags) register(f *pflag.FlagSet) {
 	f.StringArrayVar(&c.configs, "config", nil, "Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.")
 	f.StringArrayVar(&c.dirs, "checks", nil, "Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.")
-	f.StringSliceVar(&c.disabled, "disable-check", nil, "Checks to disable, by name. Comma-separated, glob patterns allowed.")
+	f.StringSliceVar(&c.disabled, "disable-check", nil, "Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.")
+	f.StringSliceVar(&c.enabled, "enable-check", nil, "Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.")
 	f.StringArrayVar(&c.params, "check-param", nil, "Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.")
 	f.StringArrayVar(&c.ignoreFindings, "ignore-finding-regex", nil, "Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.")
 	f.StringSliceVar(&c.excludeNamespaces, "exclude-namespace", nil, "Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.")
@@ -101,7 +103,8 @@ func (c *checkFlags) engine(log *slog.Logger, only, categories []string) (*check
 		params["conditions"]["rules"] = string(rules)
 	}
 	e, err := checks.Load(checks.CoreFiles().Sources, user.Sources, checks.Options{
-		Disabled: c.disabled, Only: only, Categories: categories, Params: params, Timeout: c.timeout, Exclude: exclude, Log: log,
+		Disabled: c.disabled, Enable: c.enabled, Only: only, Categories: categories, Params: params,
+		Timeout: c.timeout, Exclude: exclude, Log: log,
 	})
 	if err != nil && len(cfg.Conditions) > 0 && strings.Contains(err.Error(), `has no param "rules"`) {
 		return nil, nil, fmt.Errorf("%w: the config file has a conditions section, which is passed as param rules; "+
@@ -198,6 +201,8 @@ var checksCmd = &cobra.Command{
 	Short: "List, test and write checks",
 }
 
+var checksListAll bool
+
 var checksListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the enabled checks",
@@ -208,13 +213,22 @@ var checksListCmd = &cobra.Command{
 			return err
 		}
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "NAME\tCATEGORY\tSEVERITY\tMATCH\tREADS\tSOURCE")
-		for _, d := range e.Checks() {
+		// Without --all the columns are the same as they always were.
+		defs, header := e.Checks(), ""
+		if checksListAll {
+			defs, header = e.AllChecks(), "\tSTATE"
+		}
+		_, _ = fmt.Fprintln(w, "NAME\tCATEGORY\tSEVERITY"+header+"\tMATCH\tREADS\tSOURCE")
+		for _, d := range defs {
 			match := strings.Join(d.MatchResources, ",")
 			if len(d.ExcludeTypes) > 0 {
 				match += fmt.Sprintf(" (except %d)", len(d.ExcludeTypes))
 			}
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.Category, d.Severity, match,
+			state := ""
+			if checksListAll {
+				state = "\t" + e.State(d.Name)
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s%s\t%s\t%s\t%s\n", d.Name, d.Category, d.Severity, state, match,
 				strings.Join(d.ReadsResources, ","), d.Path)
 		}
 		return w.Flush()
@@ -272,6 +286,8 @@ var checksTypesCmd = &cobra.Command{
 
 func init() {
 	checksFlags.register(checksCmd.PersistentFlags())
+	checksListCmd.Flags().BoolVar(&checksListAll, "all", false,
+		"Also list the checks which are disabled or off by default, with a STATE column.")
 	checksCmd.AddCommand(checksListCmd, checksTestCmd, checksTypesCmd)
 	rootCmd.AddCommand(checksCmd)
 }

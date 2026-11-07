@@ -139,7 +139,9 @@ findings, like check-conditions does. Nothing is stored. Health findings
 come first, hygiene findings (which never alert) below them.
 
 With CHECK arguments (names, glob patterns allowed) only these checks run,
-and only the resource types they need are listed.
+and only the resource types they need are listed. A check which is off by
+default runs if an argument is its name ('konmon checks list --all' shows
+them); a glob pattern does not turn it on.
 
 Exit codes: 0 no health findings; 1 health findings; 2 no health findings,
 but some resource types or API groups could not be listed (other than

@@ -64,7 +64,8 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--exclude-namespace` | none | globs, not stored and not checked |
 | `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |
 | `--checks` | none | directory with own checks, repeatable |
-| `--disable-check` | none | check names, globs |
+| `--disable-check` | none | check names, globs; wins over `--enable-check` |
+| `--enable-check` | none | check names, globs; for the checks which are off by default (see [checks](checks.md)) |
 | `--check-param` | none | `check.param=value`, repeatable |
 | `--config` | none | config file with ignore rules (below), repeatable |
 | `--ignore-finding-regex` | none | drop findings; matched against `check resource namespace/name message`. Prefer `--config` |

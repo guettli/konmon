@@ -67,16 +67,20 @@ func checksTable(path string) error {
 	}
 	var b bytes.Buffer
 	b.WriteString(beginMarker + "\n\n")
-	b.WriteString("| Check | Category | Severity | Reports | Parameters (`--check-param`) | From |\n|---|---|---|---|---|---|\n")
+	b.WriteString("| Check | Category | Severity | Default | Reports | Parameters (`--check-param`) | From |\n|---|---|---|---|---|---|---|\n")
 	for _, category := range []string{checks.CategoryHealth, checks.CategoryHygiene} {
-		for _, d := range engine.Checks() {
+		for _, d := range engine.AllChecks() {
 			if d.Category != category {
 				continue
 			}
 			file := strings.TrimPrefix(d.Path, "core/")
 			reports, from := describe(sources[d.Path])
-			fmt.Fprintf(&b, "| [`%s`](../checks/%s) | %s | %s | %s | %s | %s |\n",
-				d.Name, file, d.Category, d.Severity, reports, params(d.Params), from)
+			def := "on"
+			if !d.EnabledByDefault {
+				def = "off"
+			}
+			fmt.Fprintf(&b, "| [`%s`](../checks/%s) | %s | %s | %s | %s | %s | %s |\n",
+				d.Name, file, d.Category, d.Severity, def, reports, params(d.Params), from)
 		}
 	}
 	b.WriteString("\n" + endMarker)
