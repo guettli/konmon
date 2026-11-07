@@ -10,7 +10,7 @@ It lists all resources once (every CRD included), prints what is unhealthy, and 
 
 konmon also watches **all** resources of a Kubernetes cluster (including every CRD), keeps a local copy with history in SQLite, runs **checks written in TypeScript or JavaScript** on every object, and sends alerts to Alertmanager.
 
-The 29 core checks (unhealthy `status.conditions` of any resource, crash-looping or unstartable containers, Services without endpoints, dangling references, and more; ported from [check-conditions](https://github.com/guettli/check-conditions), [k8sgpt](https://github.com/k8sgpt-ai/k8sgpt) and [Popeye](https://github.com/derailed/popeye)) are ordinary check files embedded in the binary. Your own checks work exactly the same way: no recompiling, and a check of yours with the name of a core check replaces it.
+The 30 core checks (unhealthy `status.conditions` of any resource, crash-looping or unstartable containers, Services without endpoints, dangling references, and more; ported from [check-conditions](https://github.com/guettli/check-conditions), [k8sgpt](https://github.com/k8sgpt-ai/k8sgpt) and [Popeye](https://github.com/derailed/popeye)) are ordinary check files embedded in the binary. Your own checks work exactly the same way: no recompiling, and a check of yours with the name of a core check replaces it.
 
 Conditions have one big advantage over logs and events: they show the current state, and a warning disappears as soon as the desired state is reached. But `status.conditions` only shows *now*. konmon records every change, so you can answer "what was wrong at 03:00?" and "when did this machine become not ready?".
 

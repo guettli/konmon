@@ -1,0 +1,157 @@
+check: container-resources-strange
+cases:
+  - name: normal values
+    resource: deployments.apps
+    object:
+      metadata: {name: d, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 1.5Gi}}}
+              - {name: b, image: x, resources: {requests: {cpu: "2"}, limits: {cpu: "4", memory: 900Gi}}}
+    expect: []
+  - name: a container without resources
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x}]}
+    expect: []
+  - name: an explicit zero is legal
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {cpu: "0"}, limits: {memory: "0"}}}]}
+    expect: []
+  - name: a value the API server would reject is skipped
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 1Mib, cpu: lots}}}]}
+    expect: []
+
+  - name: milli memory
+    resource: deployments.apps
+    object:
+      metadata: {name: d, namespace: default}
+      spec: {template: {spec: {containers: [{name: app, image: x, resources: {limits: {memory: 1m}}}]}}}
+    expect:
+      - key: app/limits.memory
+        container: app
+        details: {resource: limits.memory, value: 1m}
+        message: "container app: limits.memory 1m is 0.001 bytes (did you mean 1Mi?)"
+  - name: memory without a suffix
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {memory: 512}}}]}
+    expect:
+      - key: a/requests.memory
+        message: "container a: requests.memory 512 is 512 bytes (did you mean 512Mi?)"
+  - name: a decimal in canonical form gets no hint
+    # The API server stores a written "memory: 1.5" as "1500m".
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {memory: 1500m}}}]}
+    expect:
+      - key: a/requests.memory
+        message: "container a: requests.memory 1500m is 1.5 bytes"
+  - name: too much memory
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 8Ti}}}]}
+    expect:
+      - key: a/limits.memory
+        message: "container a: limits.memory 8Ti is more than maxMemory 1Ti"
+  - name: too many CPU cores
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {cpu: 1000}}}]}
+    expect:
+      - key: a/limits.cpu
+        details: {resource: limits.cpu, value: 1000}
+        message: "container a: limits.cpu 1000 is 1000 CPU cores, more than maxCpu 64"
+  - name: micro CPU
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {cpu: 100u}}}]}
+    expect:
+      - key: a/requests.cpu
+        message: "container a: requests.cpu 100u is 0.0001 CPU cores, less than minCpu 1m"
+  - name: one bad cpu and one bad memory value
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {cpu: 500, memory: 1k}}}]}
+    expect:
+      - {key: a/requests.cpu, message: "container a: requests.cpu 500 is 500 CPU cores, more than maxCpu 64"}
+      - {key: a/requests.memory, message: "container a: requests.memory 1k is 1000 bytes"}
+  - name: an initContainer is reported
+    resource: jobs.batch
+    object:
+      metadata: {name: j, namespace: default}
+      spec:
+        template:
+          spec:
+            initContainers: [{name: init, image: x, resources: {requests: {memory: 1m}}}]
+            containers: [{name: a, image: x, resources: {requests: {memory: 64Mi}}}]
+    expect:
+      - {key: init/requests.memory, container: init}
+  - name: other resources are not looked at
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec:
+        containers:
+          - name: a
+            image: x
+            resources:
+              limits: {cpu: "1", memory: 1Gi, nvidia.com/gpu: 8, ephemeral-storage: 1Mi}
+    expect: []
+
+  - name: a Pod of a ReplicaSet is reported via the workload
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, ownerReferences: [{uid: x, kind: ReplicaSet, name: rs, apiVersion: apps/v1, controller: true}]}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 1m}}}]}
+    expect: []
+  - name: a Pod of an operator's custom resource is reported
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, ownerReferences: [{uid: x, kind: Cluster, name: pg, apiVersion: postgresql.cnpg.io/v1, controller: true}]}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 1m}}}]}
+    expect:
+      - {container: a}
+
+  - name: a higher maxCpu
+    resource: pods
+    params: {maxCpu: "2000"}
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {cpu: 1000}}}]}
+    expect: []
+  - name: minMemory 0 disables the rule
+    resource: pods
+    params: {minMemory: "0"}
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 1m}}}]}
+    expect: []
+  - name: a plain byte count with a lowered minMemory
+    resource: pods
+    params: {minMemory: "100"}
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {requests: {memory: "1e3"}}}]}
+    expect: []
+  - name: a param which is not a quantity
+    resource: pods
+    params: {maxMemory: 1Gib}
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {memory: 1Gi}}}]}
+    expectError: "param maxMemory: 1Gib is not a Kubernetes quantity"
