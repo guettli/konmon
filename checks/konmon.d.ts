@@ -112,6 +112,8 @@ declare module "konmon" {
     /** "health" (default) may alert; "hygiene" is report-only. */
     category?: "health" | "hygiene";
     severity?: "critical" | "warning" | "info";
+    /** false: the check is off by default and runs only with --enable-check. */
+    enabled?: boolean;
     match: {
       /** "*", "pods", "deployments.apps", "ingresses.networking.k8s.io", ... */
       resources: string[];

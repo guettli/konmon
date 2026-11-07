@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"time"
 
@@ -23,6 +24,9 @@ type Definition struct {
 	// checks embedded in konmon.
 	Path string
 	Core bool
+	// EnabledByDefault is false for a check with enabled: false: it runs
+	// only if --enable-check names it.
+	EnabledByDefault bool
 
 	MatchResources []string
 	ExcludeTypes   []string
@@ -74,7 +78,9 @@ type rawDefinition struct {
 	Name     string `json:"name"`
 	Category string `json:"category"`
 	Severity string `json:"severity"`
-	Match    struct {
+	// Enabled is a pointer: unset means true.
+	Enabled *bool `json:"enabled"`
+	Match   struct {
 		Resources []string `json:"resources"`
 		Exclude   []string `json:"exclude"`
 	} `json:"match"`
@@ -106,7 +112,8 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 	}
 	d := &Definition{
 		Name: raw.Name, Category: raw.Category, Severity: raw.Severity, Path: src.Path, Core: core,
-		MatchResources: raw.Match.Resources, ExcludeTypes: raw.Match.Exclude, ReadsResources: raw.Reads,
+		EnabledByDefault: raw.Enabled == nil || *raw.Enabled,
+		MatchResources:   raw.Match.Resources, ExcludeTypes: raw.Match.Exclude, ReadsResources: raw.Reads,
 		Uses: raw.Uses, Params: raw.Params, program: prg, For: time.Duration(raw.For * float64(time.Second)),
 	}
 	if d.Params == nil {
@@ -212,4 +219,12 @@ func globMatch(name string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+// literalMatch reports whether one of the patterns is the name itself. It
+// turns a check which is off by default on, while a glob pattern does not:
+// 'konmon check container-resources-missing' asks for that check, 'konmon
+// check "*"' asks for the usual ones. Check names hold no glob characters.
+func literalMatch(name string, patterns []string) bool {
+	return slices.Contains(patterns, name)
 }

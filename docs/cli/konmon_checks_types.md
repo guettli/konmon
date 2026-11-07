@@ -20,7 +20,8 @@ konmon checks types [flags]
       --checks stringArray                 Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
       --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
       --db string                          Path of the SQLite database. (default "konmon.db")
-      --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed.
+      --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.
+      --enable-check strings               Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
       --exclude-namespace strings          Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
       --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Secrets are never read. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
       --ignore-finding-regex stringArray   Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.

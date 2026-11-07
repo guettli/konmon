@@ -1,6 +1,9 @@
 // Reports containers without any resource requests or limits: the
 // scheduler cannot place them sensibly and they are evicted first.
 //
+// Off by default: in most clusters most containers have no requests, which
+// is noise. Enable it with --enable-check container-resources-missing.
+//
 // Ported from Popeye (github.com/derailed/popeye, Apache-2.0),
 // internal/lint/container.go (code 106). Missing limits alone (code 107)
 // are not reported: CPU limits are often left out on purpose.
@@ -23,6 +26,7 @@ export default defineCheck({
   name: "container-resources-missing",
   category: "hygiene",
   severity: "info",
+  enabled: false,
   match: {
     resources: [
       "pods",

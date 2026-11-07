@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"regexp"
 	"slices"
@@ -182,6 +183,30 @@ func TestListingNotes(t *testing.T) {
 	}
 	if describeListing(&watch.ListResult{}).partial() {
 		t.Error("an empty listing is partial")
+	}
+}
+
+func TestEnableCheck(t *testing.T) {
+	const off = "container-resources-missing"
+	has := func(c checkFlags, only ...string) bool {
+		t.Helper()
+		e, _, err := c.engine(slog.New(slog.DiscardHandler), only, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(e.Checks(), func(d *checks.Definition) bool { return d.Name == off })
+	}
+	if has(checkFlags{}) {
+		t.Errorf("%s runs without --enable-check", off)
+	}
+	if !has(checkFlags{enabled: []string{off}}) {
+		t.Errorf("--enable-check %s does not run it", off)
+	}
+	if !has(checkFlags{}, off) {
+		t.Errorf("'konmon check %s' does not run it", off)
+	}
+	if _, _, err := (&checkFlags{enabled: []string{"nope"}}).engine(slog.New(slog.DiscardHandler), nil, nil); err == nil {
+		t.Error("want an error for an unknown --enable-check value")
 	}
 }
 

@@ -18,11 +18,16 @@ import (
 
 // Options configure Load.
 type Options struct {
-	// Disabled are glob patterns of check names to drop.
+	// Disabled are glob patterns of check names to drop. It wins over
+	// Enable.
 	Disabled []string
+	// Enable are glob patterns of check names to turn on, also those which
+	// are off by default (enabled: false in their definition).
+	Enable []string
 	// Only are glob patterns of the check names to keep; empty keeps all.
 	// A pattern which matches no check is an error (a typo would otherwise
-	// run no check at all).
+	// run no check at all). A pattern which is a check name turns that
+	// check on, also one which is off by default.
 	Only []string
 	// Categories keeps only the checks of these categories; empty keeps
 	// all.
@@ -42,8 +47,12 @@ type Options struct {
 
 // Engine runs checks. Evaluate must not be called concurrently.
 type Engine struct {
-	defs     []*Definition
-	defined  map[string]bool // all loaded check names, also disabled ones
+	defs []*Definition
+	// all are the loaded checks, also the ones which do not run.
+	all []*Definition
+	// flagOff are the checks which flags turned off (Disabled, Only,
+	// Categories), not the ones which are only off by default.
+	flagOff  map[string]bool
 	opts     Options
 	mu       sync.Mutex
 	runtimes []*jsRuntime
@@ -98,17 +107,23 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 			return nil, fmt.Errorf("params for unknown check %q", name)
 		}
 	}
-	for _, p := range opts.Only {
+	for _, p := range slices.Concat(opts.Only, opts.Enable) {
 		if !slices.ContainsFunc(order, func(name string) bool { return globMatch(name, []string{p}) }) {
 			return nil, fmt.Errorf("no check matches %q", p)
 		}
 	}
-	e := &Engine{opts: opts, defined: map[string]bool{}}
+	e := &Engine{opts: opts, flagOff: map[string]bool{}}
 	for _, name := range order {
 		d := byName[name]
-		e.defined[name] = true
+		e.all = append(e.all, d)
 		if globMatch(name, opts.Disabled) || (len(opts.Only) > 0 && !globMatch(name, opts.Only)) ||
 			(len(opts.Categories) > 0 && !slices.Contains(opts.Categories, d.Category)) {
+			e.flagOff[name] = true
+			continue
+		}
+		// A check which is off by default needs --enable-check, or its name
+		// as an argument of `konmon check`.
+		if !d.EnabledByDefault && !globMatch(name, opts.Enable) && !literalMatch(name, opts.Only) {
 			continue
 		}
 		if err := d.setParams(opts.Params[name]); err != nil {
@@ -117,14 +132,33 @@ func Load(core, user []Source, opts Options) (*Engine, error) {
 		e.defs = append(e.defs, d)
 	}
 	if len(e.defs) == 0 && (len(opts.Only) > 0 || len(opts.Categories) > 0) {
-		return nil, fmt.Errorf("no check left to run: selected %v, categories %v, disabled %v", opts.Only, opts.Categories, opts.Disabled)
+		return nil, fmt.Errorf("no check left to run: selected %v, categories %v, enabled %v, disabled %v",
+			opts.Only, opts.Categories, opts.Enable, opts.Disabled)
 	}
-	sort.Slice(e.defs, func(i, j int) bool { return e.defs[i].Name < e.defs[j].Name })
+	byNameAsc := func(defs []*Definition) { sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name }) }
+	byNameAsc(e.defs)
+	byNameAsc(e.all)
 	return e, nil
 }
 
-// Checks returns the enabled checks, sorted by name.
+// Checks returns the checks which run, sorted by name.
 func (e *Engine) Checks() []*Definition { return e.defs }
+
+// AllChecks returns all loaded checks, sorted by name: also the ones which
+// flags turned off and the ones which are off by default.
+func (e *Engine) AllChecks() []*Definition { return e.all }
+
+// State tells why a check runs or not, for `konmon checks list --all`.
+func (e *Engine) State(name string) string {
+	switch {
+	case slices.ContainsFunc(e.defs, func(d *Definition) bool { return d.Name == name }):
+		return "enabled"
+	case e.flagOff[name]:
+		return "disabled"
+	default:
+		return "off by default"
+	}
+}
 
 // Watch reports whether objects of a type are needed: some check runs on
 // them or reads them.

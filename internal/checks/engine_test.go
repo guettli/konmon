@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,10 +30,111 @@ func TestCoreChecks(t *testing.T) {
 			}
 		}
 	}
-	for _, d := range e.Checks() {
+	for _, d := range e.AllChecks() {
 		if !tested[d.Name] {
 			t.Errorf("core check %s has no test file", d.Name)
 		}
+	}
+}
+
+// container-resources-missing is the first core check which is off by
+// default: most containers have no requests, which is noise.
+func TestCoreChecksWhichAreOffByDefault(t *testing.T) {
+	core := CoreFiles()
+	e, err := Load(core.Sources, nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const off = "container-resources-missing"
+	for _, d := range e.Checks() {
+		if d.Name == off {
+			t.Errorf("%s runs without --enable-check", off)
+		}
+	}
+	if e.State(off) != "off by default" {
+		t.Errorf("State(%s) = %q", off, e.State(off))
+	}
+	if !slices.ContainsFunc(e.AllChecks(), func(d *Definition) bool { return d.Name == off }) {
+		t.Errorf("%s is not in AllChecks", off)
+	}
+	e, err = Load(core.Sources, nil, Options{Enable: []string{off}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(e.Checks(), func(d *Definition) bool { return d.Name == off }) {
+		t.Errorf("--enable-check %s does not run it", off)
+	}
+}
+
+func TestChecksOffByDefault(t *testing.T) {
+	sources := []Source{
+		{Path: "x.ts", Code: `export default { name: "x", enabled: false, match: { resources: ["pods"] }, reads: ["services"], check() { return []; } };`},
+		{Path: "y.ts", Code: `export default { name: "y", match: { resources: ["nodes"] }, check() { return []; } };`},
+	}
+	names := func(e *Engine) []string {
+		out := make([]string, 0, len(e.Checks()))
+		for _, d := range e.Checks() {
+			out = append(out, d.Name)
+		}
+		return out
+	}
+	loadOpts := func(t *testing.T, opts Options) *Engine {
+		t.Helper()
+		e, err := Load(nil, sources, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want []string
+	}{
+		{"off by default", Options{}, []string{"y"}},
+		{"--enable-check", Options{Enable: []string{"x"}}, []string{"x", "y"}},
+		{"--enable-check glob", Options{Enable: []string{"*"}}, []string{"x", "y"}},
+		{"named as an argument", Options{Only: []string{"x"}}, []string{"x"}},
+		{"a glob argument does not enable it", Options{Only: []string{"*"}}, []string{"y"}},
+		{"--disable-check wins", Options{Enable: []string{"x"}, Disabled: []string{"x"}}, []string{"y"}},
+	} {
+		if got := names(loadOpts(t, tc.opts)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: checks %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// A type which only a check that does not run needs is not watched.
+	e := loadOpts(t, Options{})
+	for _, r := range []string{"pods", "services"} {
+		gr, err := ParseResource(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Watch(gr) || e.Store(gr) {
+			t.Errorf("%s is watched or stored for a check which is off by default", r)
+		}
+	}
+	if e.State("x") != "off by default" || e.State("y") != "enabled" ||
+		loadOpts(t, Options{Disabled: []string{"x"}}).State("x") != "disabled" {
+		t.Errorf("states: x %q, y %q", e.State("x"), e.State("y"))
+	}
+
+	// The tests of a check which is off by default run: they must pass
+	// before someone enables it. A disabled check is not tested.
+	if !e.Tested(&TestFile{Check: "x"}, false) {
+		t.Error("the test of a check which is off by default is skipped")
+	}
+	cases := []TestCase{{Resource: "pods", Object: map[string]any{"metadata": map[string]any{"name": "p"}}}}
+	if res := e.RunTests(&TestFile{Check: "x", Cases: cases}); len(res) != 1 || res[0].Err != nil {
+		t.Errorf("RunTests of a check which is off by default: %+v", res)
+	}
+	if loadOpts(t, Options{Disabled: []string{"x"}}).Tested(&TestFile{Check: "x"}, false) {
+		t.Error("the test of a disabled check runs")
+	}
+
+	if _, err := Load(nil, sources, Options{Enable: []string{"nope"}}); err == nil ||
+		!strings.Contains(err.Error(), `no check matches "nope"`) {
+		t.Errorf("want an error for an --enable-check pattern which matches no check, got %v", err)
 	}
 }
 

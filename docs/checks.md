@@ -2,41 +2,41 @@
 
 ## Core checks
 
-Health findings can alert; hygiene findings are only recorded and printed. Disable any of them with `--disable-check`, or replace one with your own file of the same name.
+Health findings can alert; hygiene findings are only recorded and printed. Disable any of them with `--disable-check`, or replace one with your own file of the same name. A check whose default is `off` is too noisy for most clusters and runs only with `--enable-check NAME` (or when `konmon check NAME` names it).
 
 <!-- BEGIN generated checks table: make docs -->
 
-| Check | Category | Severity | Reports | Parameters (`--check-param`) | From |
-|---|---|---|---|---|---|
-| [`admission-policy-missing`](../checks/admission-policy-missing.ts) | health | warning | ValidatingAdmissionPolicyBindings whose policy does not exist |  | k8sgpt |
-| [`conditions`](../checks/conditions.ts) | health | warning | unhealthy entries of status.conditions | `podStartGraceSeconds=30` `rules` | check-conditions |
-| [`configmap-key-missing`](../checks/configmap-key-missing.ts) | health | warning | Pods which reference a ConfigMap, or a key of it, which does not exist (and is not optional): the container cannot start |  | Popeye |
-| [`cronjob-never-succeeded`](../checks/cronjob-never-succeeded.ts) | health | warning | CronJobs which have run but never succeeded, while their newest Job failed |  | Popeye |
-| [`deletion-timestamp`](../checks/deletion-timestamp.ts) | health | warning | objects which have been in deletion for too long: usually a finalizer whose controller is gone or failing | `olderThanSeconds=600` | check-conditions |
-| [`gateway-references-missing`](../checks/gateway-references-missing.ts) | health | warning | Gateway API objects which reference something that does not exist: a Gateway's GatewayClass, an HTTPRoute's parent Gateway, or an HTTPRoute backend Service (or its port) |  | k8sgpt, Popeye |
-| [`hpa-target-missing`](../checks/hpa-target-missing.ts) | health | warning | HorizontalPodAutoscalers whose scale target does not exist |  | k8sgpt, Popeye |
-| [`ingress-backend-missing`](../checks/ingress-backend-missing.ts) | health | warning | Ingress backends which point to a Service (or a Service port) which does not exist, and load balancer errors in the Ingress status |  | k8sgpt, Popeye |
-| [`ingress-class-missing`](../checks/ingress-class-missing.ts) | health | warning | Ingresses whose ingressClassName names an IngressClass which does not exist, or which name no class at all while there is no default class: no controller serves them |  | k8sgpt |
-| [`pod-container-restarts`](../checks/pod-container-restarts.ts) | health | warning | Pod containers which restarted often and are unhealthy right now | `restarts=5` | check-conditions |
-| [`pod-container-waiting`](../checks/pod-container-waiting.ts) | health | warning | containers which cannot start: image pull errors, bad configuration (a missing ConfigMap key, an invalid image name), failing hooks |  | k8sgpt |
-| [`pod-multiple-pdbs`](../checks/pod-multiple-pdbs.ts) | health | warning | Pods selected by more than one PodDisruptionBudget: the eviction API refuses to evict them, so node drains hang |  | Popeye |
-| [`pv-failed`](../checks/pv-failed.ts) | health | warning | PersistentVolumes in phase Failed: automatic reclamation failed |  | k8sgpt |
-| [`pvc-not-bound`](../checks/pvc-not-bound.ts) | health | warning | PersistentVolumeClaims which are Lost, or Pending for longer than a grace period | `pendingGraceSeconds=300` | k8sgpt |
-| [`service-without-endpoints`](../checks/service-without-endpoints.ts) | health | warning | Services whose Pods exist but none is ready: traffic to them fails |  | k8sgpt |
-| [`serviceaccount-missing`](../checks/serviceaccount-missing.ts) | health | warning | workloads whose Pods use a ServiceAccount which does not exist: the Pods cannot be created |  | Popeye |
-| [`webhook-service-unavailable`](../checks/webhook-service-unavailable.ts) | health | critical | admission webhooks whose Service does not exist or has no ready endpoints |  | k8sgpt |
-| [`workload-not-ready`](../checks/workload-not-ready.ts) | health | warning | StatefulSets and DaemonSets with fewer ready Pods than wanted |  | k8sgpt |
-| [`admission-policy-warnings`](../checks/admission-policy-warnings.ts) | hygiene | info | CEL type-check warnings of ValidatingAdmissionPolicies: usually an expression which refers to a field that does not exist |  | k8sgpt |
-| [`container-image-tag`](../checks/container-image-tag.ts) | hygiene | info | container images without a tag or with the tag "latest": which version runs depends on when the node pulled it |  | Popeye |
-| [`container-resources-missing`](../checks/container-resources-missing.ts) | hygiene | info | containers without any resource requests or limits: the scheduler cannot place them sensibly and they are evicted first |  | Popeye |
-| [`pod-evicted`](../checks/pod-evicted.ts) | hygiene | info | evicted Pods (node pressure, preemption) |  | k8sgpt |
-| [`pod-unmanaged`](../checks/pod-unmanaged.ts) | hygiene | info | Pods which no controller manages: they are not recreated when they or their node die |  | Popeye |
-| [`pv-released`](../checks/pv-released.ts) | hygiene | info | PersistentVolumes which are Released (their claim was deleted, reclaim policy Retain) or Available (no claim): storage which is paid for and probably forgotten |  | k8sgpt, Popeye |
-| [`rbac-binding-dangling`](../checks/rbac-binding-dangling.ts) | hygiene | warning | RoleBindings and ClusterRoleBindings which reference a Role or ClusterRole that does not exist |  | Popeye |
-| [`selector-matches-no-pods`](../checks/selector-matches-no-pods.ts) | hygiene | warning | PodDisruptionBudgets and NetworkPolicies whose pod selector matches no Pod: usually a typo or a leftover |  | k8sgpt, Popeye |
-| [`statefulset-references-missing`](../checks/statefulset-references-missing.ts) | hygiene | warning | StatefulSets whose governing Service or the StorageClass of a volumeClaimTemplate does not exist |  | k8sgpt |
-| [`storageclass-multiple-default`](../checks/storageclass-multiple-default.ts) | hygiene | warning | StorageClasses marked as default when there is more than one: which one a new claim gets is surprising |  | k8sgpt |
-| [`suspended`](../checks/suspended.ts) | hygiene | info | suspended CronJobs and Jobs, and cordoned Nodes: often a manual action which was not undone |  | k8sgpt, Popeye |
+| Check | Category | Severity | Default | Reports | Parameters (`--check-param`) | From |
+|---|---|---|---|---|---|---|
+| [`admission-policy-missing`](../checks/admission-policy-missing.ts) | health | warning | on | ValidatingAdmissionPolicyBindings whose policy does not exist |  | k8sgpt |
+| [`conditions`](../checks/conditions.ts) | health | warning | on | unhealthy entries of status.conditions | `podStartGraceSeconds=30` `rules` | check-conditions |
+| [`configmap-key-missing`](../checks/configmap-key-missing.ts) | health | warning | on | Pods which reference a ConfigMap, or a key of it, which does not exist (and is not optional): the container cannot start |  | Popeye |
+| [`cronjob-never-succeeded`](../checks/cronjob-never-succeeded.ts) | health | warning | on | CronJobs which have run but never succeeded, while their newest Job failed |  | Popeye |
+| [`deletion-timestamp`](../checks/deletion-timestamp.ts) | health | warning | on | objects which have been in deletion for too long: usually a finalizer whose controller is gone or failing | `olderThanSeconds=600` | check-conditions |
+| [`gateway-references-missing`](../checks/gateway-references-missing.ts) | health | warning | on | Gateway API objects which reference something that does not exist: a Gateway's GatewayClass, an HTTPRoute's parent Gateway, or an HTTPRoute backend Service (or its port) |  | k8sgpt, Popeye |
+| [`hpa-target-missing`](../checks/hpa-target-missing.ts) | health | warning | on | HorizontalPodAutoscalers whose scale target does not exist |  | k8sgpt, Popeye |
+| [`ingress-backend-missing`](../checks/ingress-backend-missing.ts) | health | warning | on | Ingress backends which point to a Service (or a Service port) which does not exist, and load balancer errors in the Ingress status |  | k8sgpt, Popeye |
+| [`ingress-class-missing`](../checks/ingress-class-missing.ts) | health | warning | on | Ingresses whose ingressClassName names an IngressClass which does not exist, or which name no class at all while there is no default class: no controller serves them |  | k8sgpt |
+| [`pod-container-restarts`](../checks/pod-container-restarts.ts) | health | warning | on | Pod containers which restarted often and are unhealthy right now | `restarts=5` | check-conditions |
+| [`pod-container-waiting`](../checks/pod-container-waiting.ts) | health | warning | on | containers which cannot start: image pull errors, bad configuration (a missing ConfigMap key, an invalid image name), failing hooks |  | k8sgpt |
+| [`pod-multiple-pdbs`](../checks/pod-multiple-pdbs.ts) | health | warning | on | Pods selected by more than one PodDisruptionBudget: the eviction API refuses to evict them, so node drains hang |  | Popeye |
+| [`pv-failed`](../checks/pv-failed.ts) | health | warning | on | PersistentVolumes in phase Failed: automatic reclamation failed |  | k8sgpt |
+| [`pvc-not-bound`](../checks/pvc-not-bound.ts) | health | warning | on | PersistentVolumeClaims which are Lost, or Pending for longer than a grace period | `pendingGraceSeconds=300` | k8sgpt |
+| [`service-without-endpoints`](../checks/service-without-endpoints.ts) | health | warning | on | Services whose Pods exist but none is ready: traffic to them fails |  | k8sgpt |
+| [`serviceaccount-missing`](../checks/serviceaccount-missing.ts) | health | warning | on | workloads whose Pods use a ServiceAccount which does not exist: the Pods cannot be created |  | Popeye |
+| [`webhook-service-unavailable`](../checks/webhook-service-unavailable.ts) | health | critical | on | admission webhooks whose Service does not exist or has no ready endpoints |  | k8sgpt |
+| [`workload-not-ready`](../checks/workload-not-ready.ts) | health | warning | on | StatefulSets and DaemonSets with fewer ready Pods than wanted |  | k8sgpt |
+| [`admission-policy-warnings`](../checks/admission-policy-warnings.ts) | hygiene | info | on | CEL type-check warnings of ValidatingAdmissionPolicies: usually an expression which refers to a field that does not exist |  | k8sgpt |
+| [`container-image-tag`](../checks/container-image-tag.ts) | hygiene | info | on | container images without a tag or with the tag "latest": which version runs depends on when the node pulled it |  | Popeye |
+| [`container-resources-missing`](../checks/container-resources-missing.ts) | hygiene | info | off | containers without any resource requests or limits: the scheduler cannot place them sensibly and they are evicted first |  | Popeye |
+| [`pod-evicted`](../checks/pod-evicted.ts) | hygiene | info | on | evicted Pods (node pressure, preemption) |  | k8sgpt |
+| [`pod-unmanaged`](../checks/pod-unmanaged.ts) | hygiene | info | on | Pods which no controller manages: they are not recreated when they or their node die |  | Popeye |
+| [`pv-released`](../checks/pv-released.ts) | hygiene | info | on | PersistentVolumes which are Released (their claim was deleted, reclaim policy Retain) or Available (no claim): storage which is paid for and probably forgotten |  | k8sgpt, Popeye |
+| [`rbac-binding-dangling`](../checks/rbac-binding-dangling.ts) | hygiene | warning | on | RoleBindings and ClusterRoleBindings which reference a Role or ClusterRole that does not exist |  | Popeye |
+| [`selector-matches-no-pods`](../checks/selector-matches-no-pods.ts) | hygiene | warning | on | PodDisruptionBudgets and NetworkPolicies whose pod selector matches no Pod: usually a typo or a leftover |  | k8sgpt, Popeye |
+| [`statefulset-references-missing`](../checks/statefulset-references-missing.ts) | hygiene | warning | on | StatefulSets whose governing Service or the StorageClass of a volumeClaimTemplate does not exist |  | k8sgpt |
+| [`storageclass-multiple-default`](../checks/storageclass-multiple-default.ts) | hygiene | warning | on | StorageClasses marked as default when there is more than one: which one a new claim gets is surprising |  | k8sgpt |
+| [`suspended`](../checks/suspended.ts) | hygiene | info | on | suspended CronJobs and Jobs, and cordoned Nodes: often a manual action which was not undone |  | k8sgpt, Popeye |
 
 <!-- END generated checks table -->
 
@@ -52,6 +52,7 @@ export default defineCheck({
   name: "ingress-backend-has-endpoints",
   category: "health",                         // "health" alerts, "hygiene" is report-only
   severity: "warning",                        // critical | warning | info
+  // enabled: false,                          // off by default: needs --enable-check
   match: { resources: ["ingresses.networking.k8s.io"] },
   reads: ["endpointslices.discovery.k8s.io"], // other types this check reads
   params: { minEndpoints: 1 },                // --check-param ingress-backend-has-endpoints.minEndpoints=2
@@ -88,7 +89,7 @@ export default defineCheck({
 
 A type in `reads` is kept in memory for the whole cluster: `configmap-key-missing` makes konmon watch all ConfigMaps (not stored in the database). Disable it on clusters with many large ConfigMaps.
 
-Use your checks with `--checks DIR` (repeatable). `--disable-check NAME` (globs) turns checks off, `--check-param check.param=value` changes parameters, and `konmon checks list` shows what is enabled.
+Use your checks with `--checks DIR` (repeatable). `--disable-check NAME` (globs) turns checks off, `enabled: false` in the definition makes a check off by default so that only `--enable-check NAME` runs it, `--check-param check.param=value` changes parameters, and `konmon checks list` shows what is enabled (`--all` also the rest, with their state).
 
 **Types:** `konmon checks types > konmon.d.ts` and a `tsconfig.json` like the one in [checks/](../checks/) give you completion and type errors in your editor.
 

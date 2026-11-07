@@ -79,22 +79,24 @@ type TestResult struct {
 
 var defaultTestNow = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// Tested reports whether RunTests applies to a test file: its check is
-// enabled and, for a test of a core check, not replaced by a user check.
-// A user test of a check which does not exist runs (and fails).
+// Tested reports whether RunTests applies to a test file: its check is not
+// turned off by a flag and, for a test of a core check, not replaced by a
+// user check. A check which is off by default is tested all the same: its
+// tests must pass before someone enables it. A user test of a check which
+// does not exist runs (and fails).
 func (e *Engine) Tested(tf *TestFile, core bool) bool {
-	for _, d := range e.defs {
+	for _, d := range e.all {
 		if d.Name == tf.Check {
-			return !core || d.Core
+			return (!core || d.Core) && !e.flagOff[tf.Check]
 		}
 	}
-	return !core && !e.defined[tf.Check]
+	return !core
 }
 
 // RunTests runs the cases of a test file against the check of that name.
 func (e *Engine) RunTests(tf *TestFile) []TestResult {
 	var def *Definition
-	for _, d := range e.defs {
+	for _, d := range e.all {
 		if d.Name == tf.Check {
 			def = d
 		}
