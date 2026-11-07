@@ -213,16 +213,18 @@ var checksListCmd = &cobra.Command{
 			return err
 		}
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-		defs, state := e.Checks(), ""
+		// Without --all the columns are the same as they always were.
+		defs, header := e.Checks(), ""
 		if checksListAll {
-			defs, state = e.AllChecks(), "\tSTATE"
+			defs, header = e.AllChecks(), "\tSTATE"
 		}
-		_, _ = fmt.Fprintln(w, "NAME\tCATEGORY\tSEVERITY"+state+"\tMATCH\tREADS\tSOURCE")
+		_, _ = fmt.Fprintln(w, "NAME\tCATEGORY\tSEVERITY"+header+"\tMATCH\tREADS\tSOURCE")
 		for _, d := range defs {
 			match := strings.Join(d.MatchResources, ",")
 			if len(d.ExcludeTypes) > 0 {
 				match += fmt.Sprintf(" (except %d)", len(d.ExcludeTypes))
 			}
+			state := ""
 			if checksListAll {
 				state = "\t" + e.State(d.Name)
 			}
