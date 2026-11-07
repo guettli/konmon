@@ -29,6 +29,8 @@ type Config struct {
 	// type is healthy, by resource type ("resource.group", a bare name is
 	// the core group, "*" any resource).
 	Conditions map[string]*ConditionRules `yaml:"conditions"`
+	// Escalate raises the severity of findings which stay open for long.
+	Escalate []*EscalateRule `yaml:"escalate"`
 }
 
 // ConditionRules is the polarity of condition types of one resource type.
@@ -78,6 +80,7 @@ func Load(paths []string) (*Config, error) {
 		}
 		cfg.Ignore = append(cfg.Ignore, c.Ignore...)
 		cfg.Acknowledged = append(cfg.Acknowledged, c.Acknowledged...)
+		cfg.Escalate = append(cfg.Escalate, c.Escalate...)
 		for resource, r := range c.Conditions {
 			if cfg.Conditions == nil {
 				cfg.Conditions = map[string]*ConditionRules{}
@@ -145,6 +148,15 @@ func Parse(data []byte, name string) (*Config, error) {
 			if err := r.Compile(); err != nil {
 				return nil, fmt.Errorf("%s: %w", r.Source, err)
 			}
+		}
+	}
+	for i, r := range cfg.Escalate {
+		if r == nil {
+			return nil, fmt.Errorf("%s: escalate[%d] is empty", name, i)
+		}
+		r.Source = fmt.Sprintf("%s:escalate[%d]", name, i)
+		if err := r.Compile(); err != nil {
+			return nil, fmt.Errorf("%s: %w", r.Source, err)
 		}
 	}
 	return cfg, nil

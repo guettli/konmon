@@ -540,3 +540,44 @@ func TestRunEvaluatesAsSoonAsSynced(t *testing.T) {
 		t.Errorf("Evaluations() = %d, want 1", m.Evaluations())
 	}
 }
+
+func TestEscalateRaisesSeverityOfLongFindings(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &recordingNotifier{}
+	m, _ := newTestMonitor(t, src, n)
+	ctx := context.Background()
+	m.cfg.Escalate = func(f *checks.Finding, openFor time.Duration, _ time.Time) (string, time.Duration, string) {
+		if openFor >= 10*time.Minute {
+			return "critical", 10 * time.Minute, "rule"
+		}
+		return f.Severity, 0, ""
+	}
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", true, "")}}
+	eval := func(at time.Duration) {
+		t.Helper()
+		n.firing, n.resolved = nil, nil
+		if err := m.Evaluate(ctx, t0.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eval(0)
+	eval(time.Minute)
+	if len(n.firing) != 1 || n.firing[0].Finding.Severity != "warning" {
+		t.Fatalf("want 1 warning firing, got %+v", n.firing)
+	}
+	eval(10 * time.Minute)
+	if len(n.firing) != 1 || n.firing[0].Finding.Severity != "critical" {
+		t.Fatalf("want it escalated to critical, got %+v", n.firing)
+	}
+	if err := m.notifyOpen(ctx, t0.Add(10*time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.firing) != 1 || n.firing[0].Finding.Severity != "critical" {
+		t.Fatalf("notifyOpen: want critical, got %+v", n.firing)
+	}
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: job("j", "u1", false, "")}}
+	eval(11 * time.Minute)
+	if len(n.resolved) != 1 || n.resolved[0].Finding.Severity != "critical" {
+		t.Fatalf("resolved alert must keep the escalated severity, got %+v", n.resolved)
+	}
+}

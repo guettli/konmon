@@ -43,6 +43,10 @@ type Config struct {
 	// Ignore drops findings (config rules, --ignore-finding-regex): it
 	// returns the rule which matches, or "". nil drops none.
 	Ignore func(f *checks.Finding, now time.Time) string
+	// Escalate returns the severity of a finding which is open for openFor
+	// (config escalate rules), the after of the rule which raised it and
+	// the rule; rule "" leaves the severity. nil escalates none.
+	Escalate func(f *checks.Finding, openFor time.Duration, now time.Time) (severity string, after time.Duration, rule string)
 	// ExcludeNamespaces are glob patterns of namespaces to ignore completely.
 	ExcludeNamespaces []string
 	// StoreType decides which resource types are written to the database.
@@ -446,6 +450,10 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 				m.cfg.Log.Info("finding firing", "finding", r.Finding.Line(now))
 			}
 			if r.Finding.Category == checks.CategoryHealth {
+				if sev, after, rule := m.escalate(&r, now.Sub(r.FirstSeen), now); rule != "" &&
+					now.Sub(r.FirstSeen)-m.cfg.EvalInterval < after {
+					m.cfg.Log.Info("finding escalated", "finding", r.Finding.Line(now), "severity", sev, "rule", rule)
+				}
 				firing = append(firing, r)
 			}
 		}
@@ -465,6 +473,8 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	var resolvedFired []store.FindingRow
 	for _, r := range recent {
 		if r.ResolvedAt.Sub(r.FirstSeen) >= m.forOf(&r.Finding) && r.Finding.Category == checks.CategoryHealth {
+			// The labels of the resolved alert must be those of the firing one.
+			m.escalate(&r, r.ResolvedAt.Sub(r.FirstSeen), now)
 			resolvedFired = append(resolvedFired, r)
 		}
 	}
@@ -483,6 +493,20 @@ func (m *Monitor) forOf(f *checks.Finding) time.Duration {
 	return m.cfg.For
 }
 
+// escalate applies the escalate rules to a finding which is open for
+// openFor: it sets the raised severity and returns it, the rule's after and
+// the rule ("" if none raised it).
+func (m *Monitor) escalate(r *store.FindingRow, openFor time.Duration, now time.Time) (string, time.Duration, string) {
+	if m.cfg.Escalate == nil {
+		return r.Finding.Severity, 0, ""
+	}
+	sev, after, rule := m.cfg.Escalate(&r.Finding, openFor, now)
+	if rule != "" {
+		r.Finding.Severity = sev
+	}
+	return sev, after, rule
+}
+
 // notifyOpen sends the findings which fired at their last evaluation,
 // according to the store. maxAge (0: any) skips findings not seen for
 // longer: after a long downtime the store is stale, Alertmanager has
@@ -499,6 +523,7 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time, maxAge time.Dur
 	for _, r := range open {
 		if r.ResolvedAt.IsZero() && r.LastSeen.Sub(r.FirstSeen) >= m.forOf(&r.Finding) &&
 			(maxAge == 0 || now.Sub(r.LastSeen) < maxAge) && r.Finding.Category == checks.CategoryHealth {
+			m.escalate(&r, r.LastSeen.Sub(r.FirstSeen), now)
 			firing = append(firing, r)
 		}
 	}
