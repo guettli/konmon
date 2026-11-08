@@ -375,6 +375,28 @@ func (w *Watcher) Snapshot() []Item {
 	return items
 }
 
+// Get returns one object of the informer cache. synced false: the type is
+// not watched or not listed yet, the cache does not know. synced true and
+// obj nil: the object does not exist.
+func (w *Watcher) Get(gr schema.GroupResource, namespace, name string) (obj *unstructured.Unstructured, synced bool) {
+	w.mu.Lock()
+	r := w.informers[gr]
+	w.mu.Unlock()
+	if r == nil || !r.isSynced() {
+		return nil, false
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	o, ok, err := r.informer.GetStore().GetByKey(key)
+	if err != nil || !ok {
+		return nil, true
+	}
+	u, _ := o.(*unstructured.Unstructured)
+	return u, true
+}
+
 // Available returns the types whose informers have synced.
 func (w *Watcher) Available() []schema.GroupVersionResource {
 	w.mu.Lock()

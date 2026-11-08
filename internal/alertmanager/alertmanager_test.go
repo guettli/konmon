@@ -134,3 +134,58 @@ func TestNotifyResolvesAnAlertWhoseLabelsChanged(t *testing.T) {
 		t.Errorf("the old alert is resolved only once, got %+v", got)
 	}
 }
+
+type fakeLogs map[string]string // finding name → logs
+
+func (l fakeLogs) Logs(_ context.Context, f *checks.Finding, _ time.Time) (string, bool) {
+	s, ok := l[f.Name]
+	return s, ok
+}
+
+func TestNotifyAddsLogsToFiringAlerts(t *testing.T) {
+	var got []Alert
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	pod := func(name string) checks.Finding {
+		return checks.Finding{
+			Check: "pod-container-restarts", Category: checks.CategoryHealth, Severity: "warning",
+			GVR:       schema.GroupVersionResource{Version: "v1", Resource: "pods"},
+			Namespace: "db", Name: name, UID: name, Key: "postgres", Container: "postgres",
+			Message: "container postgres restarted 1389 times, currently CrashLoopBackOff",
+		}
+	}
+	firing := []store.FindingRow{
+		{Finding: pod("with-logs"), FirstSeen: now.Add(-time.Hour)},
+		{Finding: pod("never-started"), FirstSeen: now.Add(-time.Hour)},
+	}
+	resolved := []store.FindingRow{{Finding: pod("resolved"), FirstSeen: now.Add(-time.Hour), ResolvedAt: now.Add(-time.Minute)}}
+	c := &Client{
+		URLs:           []string{srv.URL},
+		ResolveTimeout: 2 * time.Minute,
+		Logs:           fakeLogs{"with-logs": "FATAL: could not open file", "resolved": "must not be asked"},
+	}
+	if err := c.Notify(context.Background(), now, firing, resolved); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 alerts, got %d", len(got))
+	}
+	byName := map[string]Alert{}
+	for _, a := range got {
+		byName[a.Labels["name"]] = a
+	}
+	if s := byName["with-logs"].Annotations[LogsAnnotation]; s != "FATAL: could not open file" {
+		t.Errorf("logs = %q", s)
+	}
+	for _, name := range []string{"never-started", "resolved"} {
+		if s, ok := byName[name].Annotations[LogsAnnotation]; ok {
+			t.Errorf("%s: unexpected logs annotation %q", name, s)
+		}
+	}
+}
