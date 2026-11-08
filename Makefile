@@ -1,8 +1,9 @@
 # The checks of CI. `make check` before a pull request.
-# Tool versions: tools/go.mod and package.json (updated by Renovate).
+# Tool versions: tools/go.mod, tools/actionlint/go.mod (a module of its own,
+# see the comment there) and package.json (updated by Renovate).
 GO_TOOL := go tool -modfile=tools/go.mod
 GOLANGCI_LINT := $(GO_TOOL) golangci-lint
-ACTIONLINT := $(GO_TOOL) actionlint
+ACTIONLINT := go tool -modfile=tools/actionlint/go.mod actionlint
 GOVULNCHECK := $(GO_TOOL) govulncheck
 TSC := npx --no-install tsc
 PRETTIER := npx --no-install prettier
@@ -27,6 +28,7 @@ lint:
 	$(GOVULNCHECK) ./...
 	go mod tidy && git diff --exit-code go.mod go.sum
 	cd tools && go mod tidy && git diff --exit-code go.mod go.sum
+	cd tools/actionlint && go mod tidy && git diff --exit-code go.mod go.sum
 	shellcheck hack/*.sh
 	$(MAKE) docs && test -z "$$(git status --porcelain -- docs)" || (git status --short -- docs; echo 'docs are out of date: run make docs'; exit 1)
 
