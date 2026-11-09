@@ -21,6 +21,15 @@ konmon check --repeat --interval 30s
 konmon check --while StillProvisioning && music   # until no health finding matches
 konmon check --while . --timeout 15m              # until healthy; exit 3 on timeout
 
+# Before draining a node: would a PodDisruptionBudget make the drain hang?
+# Also Pods on NODE selected by two budgets (they cannot be evicted at all).
+konmon check pdb-blocks-drain pod-multiple-pdbs \
+    --check-param pdb-blocks-drain.node=NODE --check-param pod-multiple-pdbs.node=NODE \
+  && kubectl drain NODE --ignore-daemonsets --delete-emptydir-data
+# Wait until no budget blocks (e.g. Pods still starting after an update).
+konmon check pdb-blocks-drain --check-param pdb-blocks-drain.node=NODE --while . --timeout 10m \
+  && kubectl drain NODE --ignore-daemonsets --delete-emptydir-data
+
 # What is wrong now? What was wrong two hours ago?
 konmon findings --db konmon.db
 konmon findings --db konmon.db --at 2h
