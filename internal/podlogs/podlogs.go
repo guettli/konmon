@@ -83,12 +83,16 @@ type entry struct {
 }
 
 // Logs returns the logs annotation of the finding's alert. ok is false if
-// there is none: the finding is not about a container of a Pod, the Pod is
-// gone, or the container never ran (an image pull error), so it has no
-// logs. An error is not hidden: it is logged and becomes the annotation,
+// there is none: the finding is not about a Pod, the Pod is gone, no
+// container could be picked, or the container never ran (an image pull
+// error), so it has no logs.
+//
+// A finding about the whole Pod (no container, e.g. a failed Job Pod from
+// the conditions check) gets the logs of the container which failed, see
+// pickContainer. An error is not hidden: it is logged and becomes the annotation,
 // "konmon: could not fetch logs: <error>".
 func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (logs string, ok bool) {
-	if f.GVR.Group != "" || f.GVR.Resource != "pods" || f.Container == "" || f.Name == "" {
+	if f.GVR.Group != "" || f.GVR.Resource != "pods" || f.Name == "" {
 		return "", false
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.timeout())
@@ -102,7 +106,14 @@ func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (l
 		// Gone (or recreated with the same name): the alert resolves soon.
 		return "", false
 	}
-	status := containerStatus(pod, f.Container)
+	container := f.Container
+	if container == "" {
+		container = pickContainer(pod)
+		if container == "" {
+			return "", false
+		}
+	}
+	status := containerStatus(pod, container)
 	if status == nil {
 		return "", false
 	}
@@ -111,7 +122,7 @@ func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (l
 		// Never started: no logs. The waiting reason is in the finding.
 		return "", false
 	}
-	key := cacheKey{uid: string(pod.UID), container: f.Container, restartCount: status.RestartCount}
+	key := cacheKey{uid: string(pod.UID), container: container, restartCount: status.RestartCount}
 
 	p.mu.Lock()
 	if p.cache == nil {
@@ -130,9 +141,9 @@ func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (l
 	p.mu.Unlock()
 
 	e := &entry{ok: true, fetched: now, used: now}
-	body, cut, err := p.fetch(ctx, pod.Namespace, pod.Name, f.Container, previous)
+	body, cut, err := p.fetch(ctx, pod.Namespace, pod.Name, container, previous)
 	if err != nil {
-		p.logError(f, err)
+		p.logErrorContainer(f, container, err)
 		e.failed = true
 		e.logs = "konmon: could not fetch logs: " + err.Error()
 	} else {
@@ -141,7 +152,7 @@ func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (l
 			instance = "previous instance"
 		}
 		e.logs = fmt.Sprintf("konmon: last %d lines of container %s, %s (restartCount %d)\n%s",
-			p.lines(), f.Container, instance, status.RestartCount, Truncate(body, p.maxBytes(), cut))
+			p.lines(), container, instance, status.RestartCount, Truncate(body, p.maxBytes(), cut))
 	}
 	p.mu.Lock()
 	p.cache[key] = e
@@ -150,12 +161,16 @@ func (p *Fetcher) Logs(ctx context.Context, f *checks.Finding, now time.Time) (l
 }
 
 func (p *Fetcher) logError(f *checks.Finding, err error) {
+	p.logErrorContainer(f, f.Container, err)
+}
+
+func (p *Fetcher) logErrorContainer(f *checks.Finding, container string, err error) {
 	log := p.Log
 	if log == nil {
 		log = slog.Default()
 	}
 	log.Error("could not fetch container logs for alert", "namespace", f.Namespace, "pod", f.Name,
-		"container", f.Container, "check", f.Check, "err", err)
+		"container", container, "check", f.Check, "err", err)
 }
 
 // pod returns the Pod, nil if it does not exist.
@@ -238,6 +253,28 @@ func Truncate(logs string, maxBytes int, cut bool) string {
 		logs = TruncatedMarker + "\n" + logs
 	}
 	return strings.ToValidUTF8(logs, "�")
+}
+
+// pickContainer chooses the container of a finding about the whole Pod: the
+// first container (init containers first, they run first) whose current or
+// previous instance terminated with a non-zero exit code; if none failed and
+// the Pod has a single container, that one. "" if there is no clear choice.
+func pickContainer(pod *corev1.Pod) string {
+	for _, list := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for i := range list {
+			if failed(list[i].State.Terminated) || failed(list[i].LastTerminationState.Terminated) {
+				return list[i].Name
+			}
+		}
+	}
+	if len(pod.Spec.Containers) == 1 && len(pod.Spec.InitContainers) == 0 {
+		return pod.Spec.Containers[0].Name
+	}
+	return ""
+}
+
+func failed(t *corev1.ContainerStateTerminated) bool {
+	return t != nil && t.ExitCode != 0
 }
 
 func containerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {

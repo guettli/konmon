@@ -143,19 +143,95 @@ func TestNeverStartedHasNoLogs(t *testing.T) {
 	}
 }
 
-func TestNotAContainerFinding(t *testing.T) {
+func TestNotAPodFinding(t *testing.T) {
 	pod := crashingPod(9)
 	rec := &logRecorder{}
 	p, _ := newFetcher(t, rec, pod)
 	f := finding(pod)
-	f.Container = ""
-	if _, ok := p.Logs(context.Background(), f, now); ok {
-		t.Error("logs for a finding without container")
-	}
-	f = finding(pod)
 	f.GVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	if _, ok := p.Logs(context.Background(), f, now); ok {
 		t.Error("logs for a deployment")
+	}
+}
+
+// failedJobPod: a Job Pod with an init container and two containers; "work" exited 22, "helper" exited 0.
+func failedJobPod() *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "korphan-guard-1-abc", UID: "uid-job"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "init"}},
+			Containers:     []corev1.Container{{Name: "helper"}, {Name: "work"}},
+		},
+		Status: corev1.PodStatus{
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name: "init", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "helper", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}},
+				{Name: "work", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 22}}},
+			},
+		},
+	}
+}
+
+func podFinding(pod *corev1.Pod) *checks.Finding {
+	return &checks.Finding{
+		Check: "conditions", Category: checks.CategoryHealth,
+		GVR:       schema.GroupVersionResource{Version: "v1", Resource: "pods"},
+		Namespace: pod.Namespace, Name: pod.Name, UID: string(pod.UID), Key: "ContainersReady",
+	}
+}
+
+func TestPodFindingGetsLogsOfFailedContainer(t *testing.T) {
+	pod := failedJobPod()
+	rec := &logRecorder{body: "curl: (22) The requested URL returned error: 504\n"}
+	p, _ := newFetcher(t, rec, pod)
+	got, ok := p.Logs(context.Background(), podFinding(pod), now)
+	if !ok {
+		t.Fatal("want logs")
+	}
+	want := "konmon: last 40 lines of container work, current instance (restartCount 0)\n" + rec.body
+	if got != want {
+		t.Errorf("logs =\n%q\nwant\n%q", got, want)
+	}
+	if len(rec.opts) != 1 || rec.opts[0].Container != "work" || rec.opts[0].Previous {
+		t.Fatalf("log requests = %+v", rec.opts)
+	}
+}
+
+func TestPodFindingPrefersFailedInitContainer(t *testing.T) {
+	pod := failedJobPod()
+	pod.Status.InitContainerStatuses[0].State.Terminated.ExitCode = 1
+	pod.Status.ContainerStatuses = nil
+	rec := &logRecorder{body: "init broke\n"}
+	p, _ := newFetcher(t, rec, pod)
+	if got, ok := p.Logs(context.Background(), podFinding(pod), now); !ok || !strings.Contains(got, "container init,") {
+		t.Fatalf("logs = %q, %v", got, ok)
+	}
+}
+
+func TestPodFindingSingleContainer(t *testing.T) {
+	pod := crashingPod(0)
+	pod.Spec.Containers = []corev1.Container{{Name: "postgres"}}
+	pod.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{}
+	pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+	rec := &logRecorder{body: "not ready yet\n"}
+	p, _ := newFetcher(t, rec, pod)
+	if got, ok := p.Logs(context.Background(), podFinding(pod), now); !ok || !strings.Contains(got, "container postgres,") {
+		t.Fatalf("logs = %q, %v", got, ok)
+	}
+}
+
+func TestPodFindingNoClearContainer(t *testing.T) {
+	pod := failedJobPod()
+	pod.Status.ContainerStatuses[1].State.Terminated.ExitCode = 0 // nothing failed, two containers
+	rec := &logRecorder{}
+	p, _ := newFetcher(t, rec, pod)
+	if got, ok := p.Logs(context.Background(), podFinding(pod), now); ok {
+		t.Fatalf("want no annotation, got %q", got)
+	}
+	if len(rec.opts) != 0 {
+		t.Error("fetched logs without a clear container")
 	}
 }
 
