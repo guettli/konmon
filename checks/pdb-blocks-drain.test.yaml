@@ -1,0 +1,130 @@
+check: pdb-blocks-drain
+cases:
+  - name: one replica with minAvailable 1 never allows an eviction
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default, generation: 1}
+      spec: {minAvailable: 1, selector: {matchLabels: {app: web}}}
+      status:
+        observedGeneration: 1
+        expectedPods: 1
+        desiredHealthy: 1
+        currentHealthy: 1
+        disruptionsAllowed: 0
+        conditions:
+          - {type: DisruptionAllowed, status: "False", reason: InsufficientPods, lastTransitionTime: "2026-01-01T00:00:00Z"}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: db-1, namespace: default, labels: {app: db}}, spec: {nodeName: n2}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: web-1, namespace: other, labels: {app: web}}, spec: {nodeName: n3}, status: {phase: Running}}}
+    expect:
+      - key: config
+        message: "PodDisruptionBudget minAvailable 1 with 1 Pod never allows an eviction: draining node n1 hangs"
+        since: "2026-01-01T00:00:00Z"
+        details: {nodes: n1, expectedPods: 1, desiredHealthy: 1, currentHealthy: 1}
+
+  - name: maxUnavailable 0
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default, generation: 2}
+      spec: {maxUnavailable: 0, selector: {matchLabels: {app: web}}}
+      status: {observedGeneration: 2, expectedPods: 3, desiredHealthy: 3, currentHealthy: 3, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n2}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: web-2, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: web-3, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect:
+      - key: config
+        message: "PodDisruptionBudget maxUnavailable 0 with 3 Pods never allows an eviction: draining nodes n1, n2 hangs"
+        details: {nodes: "n1,n2", expectedPods: 3, desiredHealthy: 3, currentHealthy: 3}
+
+  - name: minAvailable 100%
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {minAvailable: "100%", selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 2, desiredHealthy: 2, currentHealthy: 2, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect:
+      - key: config
+        message: "PodDisruptionBudget minAvailable 100% with 2 Pods never allows an eviction: draining node n1 hangs"
+        details: {nodes: n1, expectedPods: 2, desiredHealthy: 2, currentHealthy: 2}
+
+  - name: too few healthy Pods
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {minAvailable: 2, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 3, desiredHealthy: 2, currentHealthy: 1, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: web-2, namespace: default, labels: {app: web}}, spec: {nodeName: n2}, status: {phase: Running}}}
+      - {resource: pods, object: {metadata: {name: web-old, namespace: default, labels: {app: web}}, spec: {nodeName: n3}, status: {phase: Succeeded}}}
+    expect:
+      - key: unhealthy
+        message: "PodDisruptionBudget needs 2 healthy Pods, 1 of 3 are: no eviction allowed, draining nodes n1, n2 hangs"
+        details: {nodes: "n1,n2", expectedPods: 3, desiredHealthy: 2, currentHealthy: 1}
+
+  - name: node param keeps budgets with a Pod on that node
+    resource: poddisruptionbudgets.policy
+    params: {node: n1}
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {maxUnavailable: 0, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 1, desiredHealthy: 1, currentHealthy: 1, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect:
+      - key: config
+        message: "PodDisruptionBudget maxUnavailable 0 with 1 Pod never allows an eviction: draining node n1 hangs"
+        details: {nodes: n1, expectedPods: 1, desiredHealthy: 1, currentHealthy: 1}
+
+  - name: node param drops budgets without a Pod on that node
+    resource: poddisruptionbudgets.policy
+    params: {node: n2}
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {maxUnavailable: 0, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 1, desiredHealthy: 1, currentHealthy: 1, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect: []
+
+  - name: disruptions allowed
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {minAvailable: 1, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 2, desiredHealthy: 1, currentHealthy: 2, disruptionsAllowed: 1}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect: []
+
+  - name: no Pods expected
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {minAvailable: 1, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 0, desiredHealthy: 1, currentHealthy: 0, disruptionsAllowed: 0}
+    expect: []
+
+  - name: status not observed yet
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default, generation: 3}
+      spec: {maxUnavailable: 0, selector: {matchLabels: {app: web}}}
+      status: {observedGeneration: 2, expectedPods: 1, desiredHealthy: 1, currentHealthy: 1, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, spec: {nodeName: n1}, status: {phase: Running}}}
+    expect: []
+
+  - name: Pods not scheduled
+    resource: poddisruptionbudgets.policy
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {maxUnavailable: 0, selector: {matchLabels: {app: web}}}
+      status: {expectedPods: 1, desiredHealthy: 1, currentHealthy: 0, disruptionsAllowed: 0}
+    related:
+      - {resource: pods, object: {metadata: {name: web-1, namespace: default, labels: {app: web}}, status: {phase: Pending}}}
+    expect: []
