@@ -93,7 +93,9 @@ Parameters of the checks: see [Checks](checks.md#core-checks).
 
 Annotations: `summary` (the output line), `since`, and the finding's `details` (for `conditions`: `status`, `reason`, `message`).
 
-A firing alert about a container of a Pod (a finding with a `container`, e.g. of `pod-container-restarts`) also gets the annotation `logs`: the last `--alert-log-lines` (40) log lines of the container, at most `--alert-log-bytes` (4096) bytes, cut at the front (the first line is then `[... truncated by konmon ...]`). The logs are of the previous instance if the container restarted (that is the one which crashed), else of the current one. The first line says which:
+A firing alert about a Pod also gets the annotation `logs`: the last `--alert-log-lines` (40) log lines of the container, at most `--alert-log-bytes` (4096) bytes, cut at the front (the first line is then `[... truncated by konmon ...]`). The logs are of the previous instance if the container restarted (that is the one which crashed), else of the current one. The first line says which:
+
+Which container: the one the finding names (e.g. `pod-container-restarts`). A finding about the whole Pod (e.g. `conditions` on a failed Job Pod) gets the logs of the first container whose current or previous instance exited non-zero (init containers first); if none did and the Pod has exactly one container, of that one; otherwise no `logs`.
 
 ```
 konmon: last 40 lines of container postgres, previous instance (restartCount 1389)
