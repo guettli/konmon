@@ -18,15 +18,18 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/alertmanager"
 	"github.com/guettli/konmon/internal/monitor"
+	"github.com/guettli/konmon/internal/podlogs"
 	"github.com/guettli/konmon/internal/store"
 	"github.com/guettli/konmon/internal/watch"
 )
@@ -46,6 +49,8 @@ var runOpts struct {
 	alertmanagerURLs     []string
 	alertmanagerWatchdog bool
 	resendResolved       time.Duration
+	alertLogLines        int
+	alertLogBytes        int
 }
 
 var runCmd = &cobra.Command{
@@ -80,6 +85,9 @@ func init() {
 	f.StringSliceVar(&runOpts.alertmanagerURLs, "alertmanager-url", nil, "Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.")
 	f.BoolVar(&runOpts.alertmanagerWatchdog, "alertmanager-watchdog", false, "Send an always-firing KonmonWatchdog alert, for a dead man's switch.")
 	f.DurationVar(&runOpts.resendResolved, "resend-resolved", 15*time.Minute, "How long resolved alerts are re-sent to Alertmanager.")
+	f.IntVar(&runOpts.alertLogLines, "alert-log-lines", podlogs.DefaultLines, "Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container "+
+		"(of the previous instance if it restarted). Needs get on pods/log. 0 disables it.")
+	f.IntVar(&runOpts.alertLogBytes, "alert-log-bytes", podlogs.DefaultMaxBytes, "Maximum size of the 'logs' annotation; longer logs are cut at the front.")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -202,6 +210,12 @@ func run(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
+	if runOpts.alertLogLines < 0 {
+		return errors.New("--alert-log-lines must not be negative")
+	}
+	if runOpts.alertLogBytes <= 0 {
+		return errors.New("--alert-log-bytes must be positive")
+	}
 	noRevisions, err := globMatcher(runOpts.noRevisionsFor)
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)
@@ -249,13 +263,29 @@ func run(ctx context.Context) error {
 		if runOpts.clusterName != "" {
 			labels["cluster"] = runOpts.clusterName
 		}
-		notifier = &alertmanager.Client{
+		am := &alertmanager.Client{
 			URLs:           runOpts.alertmanagerURLs,
 			Labels:         labels,
 			ResolveTimeout: 4 * runOpts.evalInterval,
 			Watchdog:       runOpts.alertmanagerWatchdog,
 			HTTP:           &http.Client{Timeout: 15 * time.Second},
 		}
+		if runOpts.alertLogLines > 0 {
+			core, err := corev1client.NewForConfig(config)
+			if err != nil {
+				return err
+			}
+			am.Logs = &podlogs.Fetcher{
+				Client: core,
+				Cached: func(namespace, name string) (*unstructured.Unstructured, bool) {
+					return watcher.Get(schema.GroupResource{Resource: "pods"}, namespace, name)
+				},
+				Lines:    runOpts.alertLogLines,
+				MaxBytes: runOpts.alertLogBytes,
+				Log:      log,
+			}
+		}
+		notifier = am
 	}
 	mon := monitor.New(monitor.Config{
 		Checks:            engine,

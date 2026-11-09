@@ -4,7 +4,7 @@
 
 To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
 
-- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
+- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole; `get` on `pods/log` is for the [`logs` annotation](#alerts) of alerts). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
 - a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
 - a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
 - a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and these probes:
@@ -72,6 +72,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--alertmanager-url` | none | repeatable; without it konmon only records |
 | `--alertmanager-watchdog` | `false` | always-firing `KonmonWatchdog` alert for a dead man's switch |
 | `--cluster-name` | none | `cluster` label on all alerts |
+| `--alert-log-lines` / `--alert-log-bytes` | `40` / `4096` | the [`logs` annotation](#alerts) of alerts about a container; `0` lines disables it |
 | `--listen` | `:8080` | `/healthz` (liveness), `/readyz` (startup, readiness), [`/metrics`](#monitoring-konmon) |
 
 Parameters of the checks: see [Checks](checks.md#core-checks).
@@ -91,6 +92,15 @@ Parameters of the checks: see [Checks](checks.md#core-checks).
 | `key` | the finding key, if there is no condition or container |
 
 Annotations: `summary` (the output line), `since`, and the finding's `details` (for `conditions`: `status`, `reason`, `message`).
+
+A firing alert about a container of a Pod (a finding with a `container`, e.g. of `pod-container-restarts`) also gets the annotation `logs`: the last `--alert-log-lines` (40) log lines of the container, at most `--alert-log-bytes` (4096) bytes, cut at the front (the first line is then `[... truncated by konmon ...]`). The logs are of the previous instance if the container restarted (that is the one which crashed), else of the current one. The first line says which:
+
+```
+konmon: last 40 lines of container postgres, previous instance (restartCount 1389)
+FATAL:  could not open file "base/16384/2601": No such file or directory
+```
+
+A container which never ran (`ImagePullBackOff`) has no logs and gets no `logs` annotation. The logs are fetched only for alerts which are sent, once per container instance (Pod UID, container, restart count): re-sending the alert on every evaluation does not fetch them again. konmon needs `get` on `pods/log` (the ClusterRole of deploy/ has it). If the fetch fails, the alert is sent anyway, with `konmon: could not fetch logs: <error>` as `logs`; konmon logs the error, and tries again after 5 minutes or after the next restart. Resolved alerts have no `logs`.
 
 ## Monitoring konmon
 

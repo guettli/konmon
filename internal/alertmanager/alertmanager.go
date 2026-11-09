@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/store"
 )
 
@@ -34,11 +35,26 @@ type Client struct {
 	// GeneratorURL is shown as source link in Alertmanager. Optional.
 	GeneratorURL string
 	HTTP         *http.Client
+	// Logs gives firing alerts about a container the logs annotation (the
+	// container's last log lines). Optional.
+	Logs LogSource
 
 	mu sync.Mutex
 	// firing are the alerts of the last Notify, by labelKey.
 	firing map[string]Alert
 }
+
+// LogSource returns the logs annotation of a finding's alert; ok false:
+// none. It is only asked for firing alerts.
+type LogSource interface {
+	Logs(ctx context.Context, f *checks.Finding, now time.Time) (logs string, ok bool)
+}
+
+// LogsAnnotation is the annotation with the container's last log lines.
+const LogsAnnotation = "logs"
+
+// logFetchers: how many logs are fetched at the same time.
+const logFetchers = 8
 
 // Alert is the Alertmanager v2 postable alert.
 type Alert struct {
@@ -55,6 +71,7 @@ func (c *Client) Notify(ctx context.Context, now time.Time, firing, resolved []s
 	for i := range firing {
 		alerts = append(alerts, c.alert(&firing[i], now, now.Add(c.ResolveTimeout)))
 	}
+	c.addLogs(ctx, now, firing, alerts)
 	firingLabels := make(map[string]struct{}, len(alerts))
 	for _, a := range alerts {
 		firingLabels[labelKey(a.Labels)] = struct{}{}
@@ -121,6 +138,33 @@ func (c *Client) Notify(ctx context.Context, now time.Time, firing, resolved []s
 		return fmt.Errorf("alertmanager: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// addLogs sets the logs annotation of the firing alerts, alerts[i] being
+// the alert of firing[i]. The fetches run in parallel: a slow kubelet must
+// not hold up the alerts for long.
+func (c *Client) addLogs(ctx context.Context, now time.Time, firing []store.FindingRow, alerts []Alert) {
+	if c.Logs == nil {
+		return
+	}
+	logs := make([]string, len(firing))
+	found := make([]bool, len(firing))
+	sem := make(chan struct{}, logFetchers)
+	var wg sync.WaitGroup
+	for i := range firing {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			logs[i], found[i] = c.Logs.Logs(ctx, &firing[i].Finding, now)
+		}()
+	}
+	wg.Wait()
+	for i := range firing {
+		if found[i] {
+			alerts[i].Annotations[LogsAnnotation] = logs[i]
+		}
+	}
 }
 
 func (c *Client) labels() map[string]string {

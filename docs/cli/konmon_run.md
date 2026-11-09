@@ -19,6 +19,8 @@ konmon run [flags]
 ### Options
 
 ```
+      --alert-log-bytes int                Maximum size of the 'logs' annotation; longer logs are cut at the front. (default 4096)
+      --alert-log-lines int                Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container (of the previous instance if it restarted). Needs get on pods/log. 0 disables it. (default 40)
       --alertmanager-url strings           Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.
       --alertmanager-watchdog              Send an always-firing KonmonWatchdog alert, for a dead man's switch.
       --check-param stringArray            Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.

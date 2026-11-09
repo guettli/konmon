@@ -94,6 +94,15 @@ func TestWatcherSendsUpsertSyncedAndDelete(t *testing.T) {
 	if !w.Synced() || len(w.Snapshot()) != 1 {
 		t.Errorf("watcher should be synced with one object, got %d", len(w.Snapshot()))
 	}
+	if obj, synced := w.Get(jobsGVR.GroupResource(), "ns", "a"); !synced || obj == nil || obj.GetUID() != "uid-a" {
+		t.Errorf("Get(a) = %v, synced %t", obj, synced)
+	}
+	if obj, synced := w.Get(jobsGVR.GroupResource(), "ns", "nope"); !synced || obj != nil {
+		t.Errorf("Get(nope) = %v, synced %t: want nil, true", obj, synced)
+	}
+	if obj, synced := w.Get(cronJobsGVR.GroupResource(), "ns", "a"); synced || obj != nil {
+		t.Errorf("Get of a type which is not watched = %v, synced %t", obj, synced)
+	}
 
 	if _, err := dyn.Resource(jobsGVR).Namespace("ns").Create(ctx, newJob("b", "uid-b"), metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
