@@ -86,6 +86,7 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/go.sum
+            tools/actionlint/go.sum
 
       - name: golangci-lint, actionlint, govulncheck, go mod tidy, shellcheck, generated docs (make lint)
         # govulncheck fails on vulnerabilities which the code can reach,

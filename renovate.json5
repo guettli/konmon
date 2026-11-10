@@ -2,7 +2,8 @@
 // (.github/workflows/renovate.yml lists this repo in RENOVATE_REPOSITORIES),
 // in a job of its own (no commands allowed). It replaced Dependabot with the
 // same cadence: weekly, grouped, 14 days after a release. Coverage: Go modules
-// (go.mod and tools/go.mod, including pseudo-version digests), npm
+// (go.mod, tools/go.mod and tools/actionlint/go.mod, including
+// pseudo-version digests), npm
 // (package.json), GitHub Actions (pinned by commit SHA) and the Node version of
 // setup-node, the Dockerfile base image, and patch releases of the Go toolchain.
 {
@@ -37,7 +38,7 @@
     {
       // The tools of CI and the Makefile (go tool -modfile=tools/go.mod).
       matchManagers: ["gomod"],
-      matchFileNames: ["tools/go.mod"],
+      matchFileNames: ["tools/go.mod", "tools/actionlint/go.mod"],
       groupName: "tools",
     },
     {
