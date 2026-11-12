@@ -51,3 +51,25 @@ cases:
       spec: {jobTemplate: {spec: {template: {spec: {containers: [{name: a, image: x}]}}}}}
     expect:
       - {key: a}
+
+  - name: an explicit request of 0 is missing
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {cpu: "0"}}}
+              - {name: b, image: x, resources: {requests: {cpu: "0"}, limits: {cpu: "1"}}}
+    expect:
+      - {key: a}
+      - {key: b}
+
+  - name: a limit of 0 does not imply a request
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {limits: {cpu: "0"}}}]}}}
+    expect:
+      - {key: a}

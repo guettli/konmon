@@ -76,3 +76,26 @@ cases:
       spec: {containers: [{name: a, image: x, resources: {limits: {cpu: "1"}}}]}
     expect:
       - {key: a}
+
+  - name: a limit of 0 is no limit
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {limits: {cpu: "0"}}}, {name: b, image: x, resources: {limits: {cpu: 0}}}]}}}
+    expect: []
+
+  - name: allowGuaranteed compares values, not spelling
+    resource: deployments.apps
+    params: {allowGuaranteed: true}
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {cpu: "1"}, limits: {cpu: 1000m}}}
+              - {name: b, image: x, resources: {requests: {cpu: 0.5}, limits: {cpu: 500m}}}
+              - {name: c, image: x, resources: {limits: {cpu: "2"}}}
+              - {name: d, image: x, resources: {requests: {cpu: 500m}, limits: {cpu: 1}}}
+    expect:
+      - {key: d}
