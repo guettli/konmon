@@ -67,6 +67,67 @@ cases:
         condition: Failed/FailureTarget
         since: "2025-12-31T23:00:00Z"
 
+  - name: failed CronJob run is history once a newer run succeeded
+    resource: jobs.batch
+    object:
+      metadata: {name: guard-1, namespace: monitoring, uid: j1, creationTimestamp: "2026-01-01T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+      status: {conditions: [{type: Failed, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit}]}
+    related:
+      - resource: jobs.batch
+        object:
+          metadata: {name: guard-2, namespace: monitoring, uid: j2, creationTimestamp: "2026-01-01T01:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+          status: {conditions: [{type: SuccessCriteriaMet, status: "True"}, {type: Complete, status: "True"}]}
+    expect: []
+
+  - name: failed CronJob run stays while no newer run succeeded
+    resource: jobs.batch
+    object:
+      metadata: {name: guard-2, namespace: monitoring, uid: j2, creationTimestamp: "2026-01-01T01:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+      status: {conditions: [{type: Failed, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit}]}
+    related:
+      - resource: jobs.batch
+        object:
+          metadata: {name: guard-1, namespace: monitoring, uid: j1, creationTimestamp: "2026-01-01T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+          status: {conditions: [{type: SuccessCriteriaMet, status: "True"}, {type: Complete, status: "True"}]}
+      - resource: jobs.batch
+        object:
+          metadata: {name: guard-3, namespace: monitoring, uid: j3, creationTimestamp: "2026-01-01T02:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+          status: {active: 1}
+    expect:
+      - {condition: Failed}
+
+  - name: Pod of a superseded CronJob run is history too
+    resource: pods
+    object:
+      metadata: {name: guard-1-abc, namespace: monitoring, ownerReferences: [{uid: j1, kind: Job, name: guard-1, apiVersion: batch/v1, controller: true}]}
+      status:
+        phase: Failed
+        conditions:
+          - {type: ContainersReady, status: "False", reason: PodFailed}
+    related:
+      - resource: jobs.batch
+        object:
+          metadata: {name: guard-1, namespace: monitoring, uid: j1, creationTimestamp: "2026-01-01T00:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+          status: {conditions: [{type: Failed, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit}]}
+      - resource: jobs.batch
+        object:
+          metadata: {name: guard-2, namespace: monitoring, uid: j2, creationTimestamp: "2026-01-01T01:00:00Z", ownerReferences: [{uid: cj1, kind: CronJob, name: guard, apiVersion: batch/v1, controller: true}]}
+          status: {conditions: [{type: SuccessCriteriaMet, status: "True"}, {type: Complete, status: "True"}]}
+    expect: []
+
+  - name: failed Job without a CronJob is always reported
+    resource: jobs.batch
+    object:
+      metadata: {name: migrate, namespace: default, uid: j9, creationTimestamp: "2026-01-01T00:00:00Z"}
+      status: {conditions: [{type: Failed, status: "True", reason: BackoffLimitExceeded, message: Job has reached the specified backoff limit}]}
+    related:
+      - resource: jobs.batch
+        object:
+          metadata: {name: migrate-2, namespace: default, uid: j10, creationTimestamp: "2026-01-01T01:00:00Z"}
+          status: {conditions: [{type: SuccessCriteriaMet, status: "True"}, {type: Complete, status: "True"}]}
+    expect:
+      - {condition: Failed}
+
   - name: Ready summary is dropped when another condition says the same
     resource: machines.cluster.x-k8s.io
     object:
