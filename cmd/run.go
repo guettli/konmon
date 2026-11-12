@@ -51,6 +51,7 @@ var runOpts struct {
 	resendResolved       time.Duration
 	alertLogLines        int
 	alertLogBytes        int
+	usageInterval        time.Duration
 }
 
 var runCmd = &cobra.Command{
@@ -87,6 +88,8 @@ func init() {
 	f.DurationVar(&runOpts.resendResolved, "resend-resolved", 15*time.Minute, "How long resolved alerts are re-sent to Alertmanager.")
 	f.IntVar(&runOpts.alertLogLines, "alert-log-lines", podlogs.DefaultLines, "Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container "+
 		"(of the previous instance if it restarted). Needs get on pods/log. 0 disables it.")
+	f.DurationVar(&runOpts.usageInterval, "usage-interval", time.Minute, "Time between two samples of container CPU and memory use from the metrics API "+
+		"(metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it.")
 	f.IntVar(&runOpts.alertLogBytes, "alert-log-bytes", podlogs.DefaultMaxBytes, "Maximum size of the 'logs' annotation; longer logs are cut at the front.")
 
 	rootCmd.AddCommand(runCmd)
@@ -207,6 +210,7 @@ func run(ctx context.Context) error {
 		flagValue{"--history-window", runOpts.historyWindow},
 		flagValue{"--retention", runOpts.retention},
 		flagValue{"--resend-resolved", runOpts.resendResolved},
+		flagValue{"--usage-interval", runOpts.usageInterval},
 	); err != nil {
 		return err
 	}
@@ -248,11 +252,17 @@ func run(ctx context.Context) error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// The usage collector attributes Pods to workloads from the watch cache, so
+	// Pods are watched while it runs even if no check needs them.
+	pods := schema.GroupResource{Resource: "pods"}
+	include := func(gr schema.GroupResource) bool {
+		return engine.Watch(gr) || (runOpts.usageInterval > 0 && gr == pods)
+	}
 	events := make(chan any, 10000)
 	watcher := &watch.Watcher{
 		Dynamic:   dyn,
 		Discovery: disc,
-		Include:   engine.Watch,
+		Include:   include,
 		Events:    events,
 		Log:       log,
 	}
@@ -315,6 +325,19 @@ func run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })
 	g.Go(func() error { return mon.Run(ctx, events) })
+	if runOpts.usageInterval > 0 {
+		lookup := func(namespace, name string) *unstructured.Unstructured {
+			if matchGlob(namespace, runOpts.checks.excludeNamespaces) {
+				return nil
+			}
+			obj, synced := watcher.Get(pods, namespace, name)
+			if !synced {
+				return nil
+			}
+			return obj
+		}
+		g.Go(func() error { return collectUsage(ctx, st, dyn, lookup, runOpts.usageInterval, log) })
+	}
 	if runOpts.listen != "" {
 		srv := healthServer(runOpts.listen, mon, watcher, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {

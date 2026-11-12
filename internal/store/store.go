@@ -14,14 +14,19 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	_ "modernc.org/sqlite" // database/sql driver "sqlite"
 
 	"github.com/guettli/konmon/internal/checks"
+	"github.com/guettli/konmon/internal/usage"
 )
 
+// schemaVersion changes only for incompatible changes: a konmon refuses a
+// database of a newer version, so a bump breaks rolling back a release.
+// Additive tables (usage) are created IF NOT EXISTS on every Open instead.
 const schemaVersion = 2
 
 const schemaSQL = `
@@ -95,10 +100,33 @@ CREATE INDEX findings_by_uid ON findings(uid, first_seen);
 CREATE INDEX findings_by_time ON findings(first_seen, resolved_at);
 `
 
+// usageSQL is the usage table: container CPU and memory use from the
+// metrics API, per workload, container and time bucket, for `konmon
+// suggest-requests`. cpu_* in cores, mem_max in bytes. Added without a schema
+// version bump (see schemaVersion): an older konmon ignores it.
+const usageSQL = `
+CREATE TABLE IF NOT EXISTS usage (
+	bucket      INTEGER NOT NULL,
+	namespace   TEXT NOT NULL,
+	kind        TEXT NOT NULL,
+	workload    TEXT NOT NULL,
+	container   TEXT NOT NULL,
+	samples     INTEGER NOT NULL,
+	cpu_sum     REAL NOT NULL,
+	cpu_max     REAL NOT NULL,
+	mem_max     INTEGER NOT NULL,
+	PRIMARY KEY (bucket, namespace, kind, workload, container)
+);
+`
+
 // Store is the SQLite database. It is safe for concurrent use, but konmon
 // has exactly one writer.
 type Store struct {
 	db *sql.DB
+	// mu serializes write transactions in this process: konmon run has two
+	// writers (the monitor and the usage collector), and a SQLITE_BUSY after
+	// the busy timeout would end the monitor.
+	mu sync.Mutex
 }
 
 // OpenExisting opens the database of a 'konmon run' at path, read-only.
@@ -150,6 +178,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := s.migrate(ctx, path); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, usageSQL); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%s: create usage table: %w", path, err)
 	}
 	return s, nil
 }
@@ -209,6 +241,8 @@ type Tx struct {
 
 // Update runs fn in one write transaction.
 func (s *Store) Update(ctx context.Context, fn func(tx *Tx) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sqlTx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -536,7 +570,7 @@ func scanFindings(rows *sql.Rows) ([]FindingRow, error) {
 }
 
 // Prune deletes history older than before: revisions, condition history,
-// resolved findings and objects deleted before that time.
+// resolved findings, objects deleted before that time, and usage buckets.
 func (tx *Tx) Prune(before time.Time) (int64, error) {
 	var total int64
 	for _, q := range []string{
@@ -545,6 +579,7 @@ func (tx *Tx) Prune(before time.Time) (int64, error) {
 		"DELETE FROM findings WHERE resolved_at IS NOT NULL AND resolved_at < ?",
 		"DELETE FROM revisions WHERE uid IN (SELECT uid FROM objects WHERE deleted_at < ?)",
 		"DELETE FROM objects WHERE deleted_at < ?",
+		"DELETE FROM usage WHERE bucket < ?",
 	} {
 		res, err := tx.tx.ExecContext(tx.ctx, q, ms(before))
 		if err != nil {
@@ -761,4 +796,69 @@ func gunzipBytes(b []byte) ([]byte, error) {
 	}
 	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
+}
+
+// AddUsage adds samples to their usage buckets (bucket start in ms).
+func (tx *Tx) AddUsage(bucket time.Time, samples []usage.Sample) error {
+	for _, smp := range samples {
+		if _, err := tx.tx.ExecContext(tx.ctx, `
+			INSERT INTO usage (bucket, namespace, kind, workload, container, samples, cpu_sum, cpu_max, mem_max)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+			ON CONFLICT (bucket, namespace, kind, workload, container) DO UPDATE SET
+				samples = samples + 1,
+				cpu_sum = cpu_sum + excluded.cpu_sum,
+				cpu_max = max(cpu_max, excluded.cpu_max),
+				mem_max = max(mem_max, excluded.mem_max)`,
+			ms(bucket), smp.Namespace, smp.Kind, smp.Workload, smp.Container, smp.CPU, smp.CPU, smp.Memory); err != nil {
+			return fmt.Errorf("add usage: %w", err)
+		}
+	}
+	return nil
+}
+
+// Usage returns the usage buckets which start at or after since. An empty
+// namespace matches all namespaces.
+func (s *Store) Usage(ctx context.Context, since time.Time, namespace string) ([]usage.Bucket, error) {
+	q := `SELECT bucket, namespace, kind, workload, container, samples, cpu_sum, cpu_max, mem_max
+		FROM usage WHERE bucket >= ?`
+	args := []any{ms(since)}
+	if namespace != "" {
+		q += " AND namespace = ?"
+		args = append(args, namespace)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil, errors.New("this database has no usage data: it is recorded by konmon run since the release which added suggest-requests")
+		}
+		return nil, fmt.Errorf("read usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var result []usage.Bucket
+	for rows.Next() {
+		var b usage.Bucket
+		var bucket int64
+		if err := rows.Scan(&bucket, &b.Namespace, &b.Kind, &b.Workload, &b.Container,
+			&b.Samples, &b.CPUSum, &b.CPUMax, &b.MemMax); err != nil {
+			return nil, err
+		}
+		b.Start = fromMS(bucket)
+		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
+// ObjectJSON returns the stored JSON of the live object, or nil.
+func (s *Store) ObjectJSON(ctx context.Context, gr schema.GroupResource, namespace, name string) ([]byte, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT object FROM objects
+		WHERE resource = ? AND namespace = ? AND name = ? AND api_group = ? AND deleted_at IS NULL
+		ORDER BY updated_at DESC LIMIT 1`, gr.Resource, namespace, name, gr.Group).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read object: %w", err)
+	}
+	return []byte(raw), nil
 }

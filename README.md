@@ -28,6 +28,8 @@ Conditions have one big advantage over logs and events: they show the current st
    conditions         current conditions per object           → Alertmanager
    condition_history  one row per condition change
    findings           one row per period a problem was open
+   usage              container CPU/memory per workload and hour
+                      (metrics API, for suggest-requests)
 ```
 
 - **Change detection ignores noise:** `resourceVersion`, `managedFields` and condition heartbeats (`lastHeartbeatTime`, `lastProbeTime`, `lastUpdateTime`) are not real changes. A revision or history row is only written if something else changed.
@@ -68,13 +70,17 @@ konmon run --db konmon.db --config konmon.yaml --alertmanager-url http://alertma
 # What was wrong two hours ago? What happened to this object?
 konmon findings --db konmon.db --at 2h
 konmon history --db konmon.db -n kube-system pods/coredns-6799fbcd5-abcde
+
+# Which CPU and memory requests fit what the containers really use?
+konmon suggest-requests --db konmon.db
+konmon suggest-requests --context prod --live 30m -n my-app   # without a database
 ```
 
 In a cluster: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'` to try it; for real use pin a release, see [Running in a cluster](docs/deploy.md).
 
 ## Documentation
 
-- [Using konmon](docs/usage.md): `check`, `findings`, `history`, the database
+- [Using konmon](docs/usage.md): `check`, `findings`, `history`, `suggest-requests`, the database
 - [Checks](docs/checks.md): the core checks, and how to write your own in TypeScript
 - [Ignoring findings](docs/config.md): the config file, teaching condition polarity, escalating findings which stay, `konmon triage`
 - [Running in a cluster](docs/deploy.md): manifests, flags, alerts, memory

@@ -4,7 +4,7 @@
 
 To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
 
-- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole; `get` on `pods/log` is for the [`logs` annotation](#alerts) of alerts). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once;
+- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole; `get` on `pods/log` is for the [`logs` annotation](#alerts) of alerts). konmon never reads Secrets, but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once (`list` on `pods.metrics.k8s.io` is for [`suggest-requests`](usage.md#suggesting-resource-requests));
 - a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
 - a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
 - a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and these probes:
@@ -59,7 +59,8 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--context` | current | kubeconfig context; in a Pod the in-cluster config is used |
 | `--for` | `2m` | how long a finding must be open before it fires |
 | `--eval-interval` | `30s` | time between two evaluations |
-| `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects); `0` keeps everything |
+| `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects, usage buckets); `0` keeps everything |
+| `--usage-interval` | `1m` | sampling of container CPU/memory from the metrics API for [`suggest-requests`](usage.md#suggesting-resource-requests); `0` disables it |
 | `--revisions` / `--no-revisions-for` | `true` / none | keep a gzip copy of every change, per resource type |
 | `--exclude-namespace` | none | globs, not stored and not checked |
 | `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |

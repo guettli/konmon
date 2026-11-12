@@ -31,6 +31,7 @@ False positives: 'konmon triage' fixes them in your config file, and
 * [konmon history](konmon_history.md)	 - Show the condition changes and findings of one object over time
 * [konmon report](konmon_report.md)	 - Tell the maintainers about a false positive, an idea or a bug
 * [konmon run](konmon_run.md)	 - Watch the cluster, record history and send alerts
+* [konmon suggest-requests](konmon_suggest-requests.md)	 - Suggest CPU and memory requests from the observed usage
 * [konmon triage](konmon_triage.md)	 - Walk through the findings and write ignore rules and condition polarity to a config file
 * [konmon version](konmon_version.md)	 - Print the version
 
