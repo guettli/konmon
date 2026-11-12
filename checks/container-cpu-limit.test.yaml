@@ -1,0 +1,78 @@
+check: container-cpu-limit
+cases:
+  - name: a CPU limit is reported, memory limits are not
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {cpu: 100m}, limits: {cpu: 500m, memory: 256Mi}}}
+              - {name: b, image: x, resources: {requests: {cpu: 100m}, limits: {memory: 256Mi}}}
+    expect:
+      - key: a
+        container: a
+        message: "container a has a CPU limit (500m): it is throttled even while the node has idle CPU; drop the limit and keep a CPU request"
+        details: {limit: 500m}
+
+  - name: a native sidecar is checked, a plain init container is not
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        template:
+          spec:
+            initContainers:
+              - {name: init, image: x, resources: {limits: {cpu: "1"}}}
+              - {name: proxy, image: x, restartPolicy: Always, resources: {limits: {cpu: "1"}}}
+            containers:
+              - {name: db, image: x}
+    expect:
+      - {key: proxy, container: proxy, details: {limit: "1"}}
+
+  - name: numeric limit
+    resource: daemonsets.apps
+    object:
+      metadata: {name: agent, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {limits: {cpu: 2}}}]}}}
+    expect:
+      - {key: a, details: {limit: "2"}}
+
+  - name: request equal to limit is reported by default
+    resource: deployments.apps
+    object: &guaranteed
+      metadata: {name: web, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {requests: {cpu: "1"}, limits: {cpu: "1"}}}]}}}
+    expect:
+      - {key: a}
+
+  - name: allowGuaranteed skips request equal to limit
+    resource: deployments.apps
+    params: {allowGuaranteed: true}
+    object: *guaranteed
+    expect: []
+
+  - name: allowGuaranteed still reports a limit above the request
+    resource: deployments.apps
+    params: {allowGuaranteed: true}
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {requests: {cpu: 500m}, limits: {cpu: "1"}}}]}}}
+    expect:
+      - {key: a}
+
+  - name: a Pod of a ReplicaSet is reported via the workload
+    resource: pods
+    object:
+      metadata: {name: web-1, namespace: default, ownerReferences: [{uid: x, kind: ReplicaSet, name: web-abc, apiVersion: apps/v1, controller: true}]}
+      spec: {containers: [{name: a, image: x, resources: {limits: {cpu: "1"}}}]}
+    expect: []
+
+  - name: a standalone Pod is reported
+    resource: pods
+    object:
+      metadata: {name: debug, namespace: default}
+      spec: {containers: [{name: a, image: x, resources: {limits: {cpu: "1"}}}]}
+    expect:
+      - {key: a}

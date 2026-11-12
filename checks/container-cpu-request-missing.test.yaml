@@ -1,0 +1,53 @@
+check: container-cpu-request-missing
+cases:
+  - name: a container without a CPU request is reported
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          spec:
+            containers:
+              - {name: a, image: x, resources: {requests: {memory: 64Mi}}}
+              - {name: b, image: x, resources: {requests: {cpu: 10m}}}
+              - {name: c, image: x}
+    expect:
+      - {key: a, container: a, message: "container a has no CPU request: the scheduler counts it as using no CPU, and it gets the smallest CPU share under contention"}
+      - {key: c, container: c}
+
+  - name: a CPU limit implies the request (reported by container-cpu-limit)
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {template: {spec: {containers: [{name: a, image: x, resources: {limits: {cpu: 500m}}}]}}}
+    expect: []
+
+  - name: a native sidecar is checked, a plain init container is not
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec:
+        template:
+          spec:
+            initContainers:
+              - {name: init, image: x}
+              - {name: proxy, image: x, restartPolicy: Always}
+            containers:
+              - {name: db, image: x, resources: {requests: {cpu: 100m}}}
+    expect:
+      - {key: proxy, container: proxy}
+
+  - name: a Job of a CronJob is reported via the CronJob
+    resource: jobs.batch
+    object:
+      metadata: {name: j, namespace: default, ownerReferences: [{uid: x, kind: CronJob, name: c, apiVersion: batch/v1, controller: true}]}
+      spec: {template: {spec: {containers: [{name: a, image: x}]}}}
+    expect: []
+
+  - name: a CronJob is reported
+    resource: cronjobs.batch
+    object:
+      metadata: {name: c, namespace: default}
+      spec: {jobTemplate: {spec: {template: {spec: {containers: [{name: a, image: x}]}}}}}
+    expect:
+      - {key: a}
