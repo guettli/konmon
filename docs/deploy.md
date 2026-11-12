@@ -59,7 +59,8 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--context` | current | kubeconfig context; in a Pod the in-cluster config is used |
 | `--for` | `2m` | how long a finding must be open before it fires |
 | `--eval-interval` | `30s` | time between two evaluations |
-| `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects); `0` keeps everything |
+| `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects, usage buckets); `0` keeps everything |
+| `--usage-interval` | `1m` | sampling of container CPU/memory from the metrics API for [`suggest-requests`](usage.md#suggesting-resource-requests); `0` disables it |
 | `--revisions` / `--no-revisions-for` | `true` / none | keep a gzip copy of every change, per resource type |
 | `--exclude-namespace` | none | globs, not stored and not checked |
 | `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |

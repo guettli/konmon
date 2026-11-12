@@ -45,6 +45,7 @@ konmon run [flags]
       --resend-resolved duration           How long resolved alerts are re-sent to Alertmanager. (default 15m0s)
       --retention duration                 How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything. (default 720h0m0s)
       --revisions                          Store a compressed copy of every changed object, not only the latest version. (default true)
+      --usage-interval duration            Time between two samples of container CPU and memory use from the metrics API (metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it. (default 1m0s)
 ```
 
 ### Options inherited from parent commands

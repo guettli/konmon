@@ -20,9 +20,10 @@ import (
 	_ "modernc.org/sqlite" // database/sql driver "sqlite"
 
 	"github.com/guettli/konmon/internal/checks"
+	"github.com/guettli/konmon/internal/usage"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schemaSQL = `
 CREATE TABLE objects (
@@ -93,6 +94,24 @@ CREATE TABLE findings (
 CREATE UNIQUE INDEX findings_open_key ON findings(key) WHERE resolved_at IS NULL;
 CREATE INDEX findings_by_uid ON findings(uid, first_seen);
 CREATE INDEX findings_by_time ON findings(first_seen, resolved_at);
+` + usageSQL
+
+// usageSQL is the usage table (schema version 3): container CPU and memory
+// use from the metrics API, per workload, container and time bucket, for
+// `konmon suggest-requests`. cpu_* in cores, mem_max in bytes.
+const usageSQL = `
+CREATE TABLE usage (
+	bucket      INTEGER NOT NULL,
+	namespace   TEXT NOT NULL,
+	kind        TEXT NOT NULL,
+	workload    TEXT NOT NULL,
+	container   TEXT NOT NULL,
+	samples     INTEGER NOT NULL,
+	cpu_sum     REAL NOT NULL,
+	cpu_max     REAL NOT NULL,
+	mem_max     INTEGER NOT NULL,
+	PRIMARY KEY (bucket, namespace, kind, workload, container)
+);
 `
 
 // Store is the SQLite database. It is safe for concurrent use, but konmon
@@ -193,7 +212,12 @@ func (s *Store) migrate(ctx context.Context, path string) error {
 		return err
 	}
 	return s.Update(ctx, func(tx *Tx) error {
-		if _, err := tx.tx.ExecContext(ctx, schemaSQL); err != nil {
+		ddl := schemaSQL
+		if version == 2 {
+			// Version 2 lacks only the usage table.
+			ddl = usageSQL
+		}
+		if _, err := tx.tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("create schema: %w", err)
 		}
 		_, err := tx.tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
@@ -536,7 +560,7 @@ func scanFindings(rows *sql.Rows) ([]FindingRow, error) {
 }
 
 // Prune deletes history older than before: revisions, condition history,
-// resolved findings and objects deleted before that time.
+// resolved findings, objects deleted before that time, and usage buckets.
 func (tx *Tx) Prune(before time.Time) (int64, error) {
 	var total int64
 	for _, q := range []string{
@@ -545,6 +569,7 @@ func (tx *Tx) Prune(before time.Time) (int64, error) {
 		"DELETE FROM findings WHERE resolved_at IS NOT NULL AND resolved_at < ?",
 		"DELETE FROM revisions WHERE uid IN (SELECT uid FROM objects WHERE deleted_at < ?)",
 		"DELETE FROM objects WHERE deleted_at < ?",
+		"DELETE FROM usage WHERE bucket < ?",
 	} {
 		res, err := tx.tx.ExecContext(tx.ctx, q, ms(before))
 		if err != nil {
@@ -761,4 +786,67 @@ func gunzipBytes(b []byte) ([]byte, error) {
 	}
 	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
+}
+
+// AddUsage adds samples to their usage buckets (bucket start in ms).
+func (tx *Tx) AddUsage(bucket time.Time, samples []usage.Sample) error {
+	for _, smp := range samples {
+		if _, err := tx.tx.ExecContext(tx.ctx, `
+			INSERT INTO usage (bucket, namespace, kind, workload, container, samples, cpu_sum, cpu_max, mem_max)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+			ON CONFLICT (bucket, namespace, kind, workload, container) DO UPDATE SET
+				samples = samples + 1,
+				cpu_sum = cpu_sum + excluded.cpu_sum,
+				cpu_max = max(cpu_max, excluded.cpu_max),
+				mem_max = max(mem_max, excluded.mem_max)`,
+			ms(bucket), smp.Namespace, smp.Kind, smp.Workload, smp.Container, smp.CPU, smp.CPU, smp.Memory); err != nil {
+			return fmt.Errorf("add usage: %w", err)
+		}
+	}
+	return nil
+}
+
+// Usage returns the usage buckets which start at or after since. An empty
+// namespace matches all namespaces.
+func (s *Store) Usage(ctx context.Context, since time.Time, namespace string) ([]usage.Bucket, error) {
+	q := `SELECT bucket, namespace, kind, workload, container, samples, cpu_sum, cpu_max, mem_max
+		FROM usage WHERE bucket >= ?`
+	args := []any{ms(since)}
+	if namespace != "" {
+		q += " AND namespace = ?"
+		args = append(args, namespace)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("read usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var result []usage.Bucket
+	for rows.Next() {
+		var b usage.Bucket
+		var bucket int64
+		if err := rows.Scan(&bucket, &b.Namespace, &b.Kind, &b.Workload, &b.Container,
+			&b.Samples, &b.CPUSum, &b.CPUMax, &b.MemMax); err != nil {
+			return nil, err
+		}
+		b.Start = fromMS(bucket)
+		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
+// ObjectJSON returns the stored JSON of the live object of this kind
+// (case-insensitive) and name, or nil.
+func (s *Store) ObjectJSON(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT object FROM objects
+		WHERE lower(kind) = ? AND namespace = ? AND name = ? AND deleted_at IS NULL
+		ORDER BY updated_at DESC LIMIT 1`, strings.ToLower(kind), namespace, name).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read object: %w", err)
+	}
+	return []byte(raw), nil
 }
