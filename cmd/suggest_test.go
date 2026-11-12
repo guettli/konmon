@@ -111,10 +111,39 @@ func TestSuggestWithoutUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = st.Close()
-	dbPath, suggestOpts.output, suggestOpts.since, suggestOpts.cpuPercentile = path, "table", "168h", 95
-	defer func() { dbPath = "konmon.db" }()
+	oldDB, oldOpts := dbPath, suggestOpts
+	t.Cleanup(func() { dbPath, suggestOpts = oldDB, oldOpts })
+	dbPath, suggestOpts.output, suggestOpts.since, suggestOpts.cpuPercentile, suggestOpts.live = path, "table", "168h", 95, 0
 	var out bytes.Buffer
 	if err := suggest(context.Background(), &out, &out); err == nil || !strings.Contains(err.Error(), "no usage recorded") {
 		t.Errorf("want a no-usage error, got %v", err)
+	}
+}
+
+// A nightly CronJob has one hour of data per day: the span of its runs
+// decides, not the hour count.
+func TestSuggestCronJobBySpan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.db")
+	st, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := usage.Key{Namespace: "ns", Kind: "CronJob", Workload: "backup", Container: "b"}
+	now := time.Now().UTC().Truncate(time.Hour)
+	err = st.Update(context.Background(), func(tx *store.Tx) error {
+		for d := 1; d <= 3; d++ {
+			if err := tx.AddUsage(now.Add(-time.Duration(d)*24*time.Hour), []usage.Sample{{Key: job, CPU: 0.5, Memory: 64 << 20}}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	_ = st.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runSuggest(t, path, "yaml")
+	if !strings.Contains(out, "cpu: 500m") {
+		t.Errorf("3 nightly runs over 49h should be enough:\n%s", out)
 	}
 }

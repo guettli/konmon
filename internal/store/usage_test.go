@@ -3,11 +3,14 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/guettli/konmon/internal/usage"
 )
+
+var podGR = podRef.GVR.GroupResource()
 
 func TestUsageBuckets(t *testing.T) {
 	s := openTestStore(t)
@@ -66,14 +69,14 @@ func TestUsageBuckets(t *testing.T) {
 	}
 }
 
-func TestMigrateFromVersion2(t *testing.T) {
+func TestUsageTableAddedWithoutVersionBump(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "konmon.db")
 	s, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A version 2 database: everything but the usage table.
-	if _, err := s.db.ExecContext(context.Background(), "DROP TABLE usage; PRAGMA user_version = 2"); err != nil {
+	// A database of a release before the usage table.
+	if _, err := s.db.ExecContext(context.Background(), "DROP TABLE usage"); err != nil {
 		t.Fatal(err)
 	}
 	update(t, s, func(tx *Tx) error {
@@ -81,6 +84,16 @@ func TestMigrateFromVersion2(t *testing.T) {
 		return err
 	})
 	_ = s.Close()
+
+	// Read-only commands work on it and explain the missing usage data.
+	ro, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ro.Usage(context.Background(), t0, ""); err == nil || !strings.Contains(err.Error(), "no usage data") {
+		t.Errorf("want a no-usage-data error, got %v", err)
+	}
+	_ = ro.Close()
 
 	s, err = Open(context.Background(), path)
 	if err != nil {
@@ -90,13 +103,14 @@ func TestMigrateFromVersion2(t *testing.T) {
 	update(t, s, func(tx *Tx) error {
 		return tx.AddUsage(t0, []usage.Sample{{Key: usage.Key{Namespace: "ns", Kind: "Pod", Workload: "p1", Container: "c"}, CPU: 1, Memory: 1}})
 	})
-	raw, err := s.ObjectJSON(context.Background(), "pod", "ns", "p1")
+	raw, err := s.ObjectJSON(context.Background(), podGR, "ns", "p1")
 	if err != nil || string(raw) != `{"kind":"Pod"}` {
-		t.Errorf("object kept by the migration: %q, %v", raw, err)
+		t.Errorf("object kept: %q, %v", raw, err)
 	}
+	// The version stays: the previous release must still open the database.
 	var version int
-	if err := s.db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
-		t.Errorf("schema version %d (%v), want %d", version, err, schemaVersion)
+	if err := s.db.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+		t.Errorf("schema version %d (%v), want 2", version, err)
 	}
 }
 
@@ -108,7 +122,7 @@ func TestObjectJSONSkipsDeleted(t *testing.T) {
 		}
 		return tx.MarkDeleted(podRef.UID, t0)
 	})
-	raw, err := s.ObjectJSON(context.Background(), "Pod", "ns", "p1")
+	raw, err := s.ObjectJSON(context.Background(), podGR, "ns", "p1")
 	if err != nil || raw != nil {
 		t.Errorf("deleted object: %q, %v", raw, err)
 	}

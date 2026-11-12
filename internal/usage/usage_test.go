@@ -37,6 +37,9 @@ func TestOwner(t *testing.T) {
 		{"replicaset without the hash label", pod("rs-x", nil, ref("ReplicaSet", "rs", true)), "ReplicaSet", "rs"},
 		{"statefulset", pod("db-0", nil, ref("StatefulSet", "db", true)), "StatefulSet", "db"},
 		{"job of a cronjob", pod("backup-29340000-x", nil, ref("Job", "backup-29340000", true)), "CronJob", "backup"},
+		{"date-stamped job is no cronjob", pod("migrate-20261112-x", nil, ref("Job", "migrate-20261112", true)), "Job", "migrate-20261112"},
+		{"argo rollout", pod("api-7c9-x", map[string]any{"rollouts-pod-template-hash": "7c9"}, ref("ReplicaSet", "api-7c9", true)), "Rollout", "api"},
+		{"static pod", pod("etcd-node1", nil, map[string]any{"apiVersion": "v1", "kind": "Node", "name": "node1", "uid": "u", "controller": true}), "Pod", "etcd-node1"},
 		{"standalone job", pod("migrate-x", nil, ref("Job", "migrate", true)), "Job", "migrate"},
 		{"custom owner", pod("pg-1", nil, ref("Cluster", "pg", true)), "Cluster", "pg"},
 		{"non-controller owner is ignored", pod("p", nil, ref("ConfigMap", "c", false)), "Pod", "p"},
@@ -126,7 +129,15 @@ func TestFetch(t *testing.T) {
 	if _, err := dyn.Resource(PodMetrics).Namespace("ns").Create(context.Background(), pm, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	unknown := pm.DeepCopy()
+	unknown.SetName("not-cached-yet")
+	if _, err := dyn.Resource(PodMetrics).Namespace("ns").Create(context.Background(), unknown, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	lookup := func(_, name string) *unstructured.Unstructured {
+		if name == "not-cached-yet" {
+			return nil
+		}
 		return pod(name, map[string]any{"pod-template-hash": "6d8f"}, ref("ReplicaSet", "web-6d8f", true))
 	}
 	samples, err := Fetch(context.Background(), dyn, "", lookup)

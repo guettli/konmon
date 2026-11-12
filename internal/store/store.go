@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -23,7 +24,10 @@ import (
 	"github.com/guettli/konmon/internal/usage"
 )
 
-const schemaVersion = 3
+// schemaVersion changes only for incompatible changes: a konmon refuses a
+// database of a newer version, so a bump breaks rolling back a release.
+// Additive tables (usage) are created IF NOT EXISTS on every Open instead.
+const schemaVersion = 2
 
 const schemaSQL = `
 CREATE TABLE objects (
@@ -94,13 +98,14 @@ CREATE TABLE findings (
 CREATE UNIQUE INDEX findings_open_key ON findings(key) WHERE resolved_at IS NULL;
 CREATE INDEX findings_by_uid ON findings(uid, first_seen);
 CREATE INDEX findings_by_time ON findings(first_seen, resolved_at);
-` + usageSQL
+`
 
-// usageSQL is the usage table (schema version 3): container CPU and memory
-// use from the metrics API, per workload, container and time bucket, for
-// `konmon suggest-requests`. cpu_* in cores, mem_max in bytes.
+// usageSQL is the usage table: container CPU and memory use from the
+// metrics API, per workload, container and time bucket, for `konmon
+// suggest-requests`. cpu_* in cores, mem_max in bytes. Added without a schema
+// version bump (see schemaVersion): an older konmon ignores it.
 const usageSQL = `
-CREATE TABLE usage (
+CREATE TABLE IF NOT EXISTS usage (
 	bucket      INTEGER NOT NULL,
 	namespace   TEXT NOT NULL,
 	kind        TEXT NOT NULL,
@@ -118,6 +123,10 @@ CREATE TABLE usage (
 // has exactly one writer.
 type Store struct {
 	db *sql.DB
+	// mu serializes write transactions in this process: konmon run has two
+	// writers (the monitor and the usage collector), and a SQLITE_BUSY after
+	// the busy timeout would end the monitor.
+	mu sync.Mutex
 }
 
 // OpenExisting opens the database of a 'konmon run' at path, read-only.
@@ -170,6 +179,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if _, err := db.ExecContext(ctx, usageSQL); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%s: create usage table: %w", path, err)
+	}
 	return s, nil
 }
 
@@ -212,12 +225,7 @@ func (s *Store) migrate(ctx context.Context, path string) error {
 		return err
 	}
 	return s.Update(ctx, func(tx *Tx) error {
-		ddl := schemaSQL
-		if version == 2 {
-			// Version 2 lacks only the usage table.
-			ddl = usageSQL
-		}
-		if _, err := tx.tx.ExecContext(ctx, ddl); err != nil {
+		if _, err := tx.tx.ExecContext(ctx, schemaSQL); err != nil {
 			return fmt.Errorf("create schema: %w", err)
 		}
 		_, err := tx.tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
@@ -233,6 +241,8 @@ type Tx struct {
 
 // Update runs fn in one write transaction.
 func (s *Store) Update(ctx context.Context, fn func(tx *Tx) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sqlTx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
@@ -818,6 +828,9 @@ func (s *Store) Usage(ctx context.Context, since time.Time, namespace string) ([
 	}
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil, errors.New("this database has no usage data: it is recorded by konmon run since the release which added suggest-requests")
+		}
 		return nil, fmt.Errorf("read usage: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -835,13 +848,12 @@ func (s *Store) Usage(ctx context.Context, since time.Time, namespace string) ([
 	return result, rows.Err()
 }
 
-// ObjectJSON returns the stored JSON of the live object of this kind
-// (case-insensitive) and name, or nil.
-func (s *Store) ObjectJSON(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+// ObjectJSON returns the stored JSON of the live object, or nil.
+func (s *Store) ObjectJSON(ctx context.Context, gr schema.GroupResource, namespace, name string) ([]byte, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT object FROM objects
-		WHERE lower(kind) = ? AND namespace = ? AND name = ? AND deleted_at IS NULL
-		ORDER BY updated_at DESC LIMIT 1`, strings.ToLower(kind), namespace, name).Scan(&raw)
+		WHERE resource = ? AND namespace = ? AND name = ? AND api_group = ? AND deleted_at IS NULL
+		ORDER BY updated_at DESC LIMIT 1`, gr.Resource, namespace, name, gr.Group).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

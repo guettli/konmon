@@ -252,11 +252,17 @@ func run(ctx context.Context) error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// The usage collector attributes Pods to workloads from the watch cache, so
+	// Pods are watched while it runs even if no check needs them.
+	pods := schema.GroupResource{Resource: "pods"}
+	include := func(gr schema.GroupResource) bool {
+		return engine.Watch(gr) || (runOpts.usageInterval > 0 && gr == pods)
+	}
 	events := make(chan any, 10000)
 	watcher := &watch.Watcher{
 		Dynamic:   dyn,
 		Discovery: disc,
-		Include:   engine.Watch,
+		Include:   include,
 		Events:    events,
 		Log:       log,
 	}
@@ -320,11 +326,17 @@ func run(ctx context.Context) error {
 	g.Go(func() error { return watcher.Run(ctx, runOpts.discoveryInterval) })
 	g.Go(func() error { return mon.Run(ctx, events) })
 	if runOpts.usageInterval > 0 {
-		pods := func(namespace, name string) *unstructured.Unstructured {
-			obj, _ := watcher.Get(schema.GroupResource{Resource: "pods"}, namespace, name)
+		lookup := func(namespace, name string) *unstructured.Unstructured {
+			if matchGlob(namespace, runOpts.checks.excludeNamespaces) {
+				return nil
+			}
+			obj, synced := watcher.Get(pods, namespace, name)
+			if !synced {
+				return nil
+			}
 			return obj
 		}
-		g.Go(func() error { return collectUsage(ctx, st, dyn, pods, runOpts.usageInterval, log) })
+		g.Go(func() error { return collectUsage(ctx, st, dyn, lookup, runOpts.usageInterval, log) })
 	}
 	if runOpts.listen != "" {
 		srv := healthServer(runOpts.listen, mon, watcher, time.Now(), runOpts.evalInterval)

@@ -16,7 +16,8 @@ use, rounded up to 5m; memory request = the highest memory use seen plus
 sample: a request is per Pod.
 
 DATA is the number of hours with samples (minutes with --live). Workloads
-with less than --min-hours of it get no suggestion: a day
+with less than --min-hours of it get no suggestion; for Jobs and CronJobs
+the time span from their first to their last run counts instead. A day
 covers the daily load pattern, a week the weekly one. A workload which does
 real work only now and then (a nightly job) needs a window that contains it.
 

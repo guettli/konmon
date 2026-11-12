@@ -10,6 +10,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,10 @@ func (b *Bucket) Add(s Sample) {
 // PodLookup returns a Pod by namespace and name, nil if unknown.
 type PodLookup func(namespace, name string) *unstructured.Unstructured
 
+// Batch reports whether kind runs now and then (Jobs) rather than all the
+// time: its data is judged by the time span it covers, not by hours.
+func Batch(kind string) bool { return kind == "CronJob" || kind == "Job" }
+
 // Fetch lists the current PodMetrics and returns one sample per container,
 // attributed to the Pod's workload (pods resolves owners).
 func Fetch(ctx context.Context, dyn dynamic.Interface, namespace string, pods PodLookup) ([]Sample, error) {
@@ -73,7 +78,12 @@ func Fetch(ctx context.Context, dyn dynamic.Interface, namespace string, pods Po
 	for i := range list.Items {
 		pm := &list.Items[i]
 		ns, name := pm.GetNamespace(), pm.GetName()
-		kind, workload := Owner(pods(ns, name), name)
+		pod := pods(ns, name)
+		if pod == nil {
+			// Not known (yet): a per-Pod row would split the workload.
+			continue
+		}
+		kind, workload := Owner(pod, name)
 		containers, _, _ := unstructured.NestedSlice(pm.Object, "containers")
 		for _, c := range containers {
 			cm, ok := c.(map[string]any)
@@ -105,13 +115,24 @@ func quantity(v any) (resource.Quantity, error) {
 	return resource.ParseQuantity(s)
 }
 
-// A Job created by a CronJob is named <cronjob>-<scheduled time in minutes>.
-var cronJobSuffix = regexp.MustCompile(`^(.+)-\d{8,}$`)
+// A Job created by a CronJob is named <cronjob>-<scheduled time in minutes
+// since the epoch>.
+var cronJobSuffix = regexp.MustCompile(`^(.+)-(\d{8,})$`)
+
+// scheduledMinutes reports whether s is a plausible CronJob schedule time in
+// minutes since the epoch (2020 to 2099). A date like 20261112 (YYYYMMDD,
+// at most 20991231) stays below that range.
+func scheduledMinutes(s string) bool {
+	n, err := strconv.ParseInt(s, 10, 64)
+	return err == nil && n >= 26_297_280 && n < 68_374_080
+}
 
 // Owner returns the workload of a Pod: its controller, with a ReplicaSet of a
-// Deployment resolved to the Deployment (via the pod-template-hash label) and
-// a Job of a CronJob to the CronJob (via the Job name). Without the Pod
-// object (not cached yet) the Pod itself is the workload.
+// Deployment resolved to the Deployment (via the pod-template-hash label), of
+// an Argo Rollout to the Rollout (rollouts-pod-template-hash), and a Job of a
+// CronJob to the CronJob (via the Job name). A static Pod (owned by its
+// Node) is its own workload. Without the Pod object the Pod itself is the
+// workload; callers should skip Pods they do not know yet.
 func Owner(pod *unstructured.Unstructured, podName string) (kind, name string) {
 	if pod == nil {
 		return "Pod", podName
@@ -122,15 +143,22 @@ func Owner(pod *unstructured.Unstructured, podName string) (kind, name string) {
 		}
 		switch ref.Kind {
 		case "ReplicaSet":
+			if hash := pod.GetLabels()["rollouts-pod-template-hash"]; hash != "" {
+				if r, ok := strings.CutSuffix(ref.Name, "-"+hash); ok && r != "" {
+					return "Rollout", r
+				}
+			}
 			if hash := pod.GetLabels()["pod-template-hash"]; hash != "" {
 				if d, ok := strings.CutSuffix(ref.Name, "-"+hash); ok && d != "" {
 					return "Deployment", d
 				}
 			}
 		case "Job":
-			if m := cronJobSuffix.FindStringSubmatch(ref.Name); m != nil {
+			if m := cronJobSuffix.FindStringSubmatch(ref.Name); m != nil && scheduledMinutes(m[2]) {
 				return "CronJob", m[1]
 			}
+		case "Node":
+			return "Pod", pod.GetName()
 		}
 		return ref.Kind, ref.Name
 	}

@@ -64,7 +64,7 @@ kustomizations.kustomize.toolkit.fluxcd.io flux-system/infra uid=10cb7e5c-… fi
 
 ## Suggesting resource requests
 
-`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment, a CronJob's Jobs for the CronJob.
+`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment (or Argo Rollout), a CronJob's Jobs for the CronJob. Namespaces excluded with `--exclude-namespace` are not sampled.
 
 `konmon suggest-requests` turns that into requests:
 
@@ -79,8 +79,10 @@ monitoring  Deployment/reloader          reloader          168h  -        1m    
 - **Memory request** = the highest memory use seen (working set) plus 15% (`--memory-headroom`), rounded up to 1Mi. Memory cannot be borrowed back like CPU, so the peak counts.
 - **DATA** is the number of hours with samples. Workloads with less than `--min-hours` (24) get no suggestion. Use a window (`--since`, default `168h`) which contains the real load: a week covers the weekly pattern, a nightly job needs nights.
 - `-o yaml` prints a `resources:` snippet per container, `-o json` everything.
-- `--live 30m` samples the cluster itself for that long instead of reading a database (`--live-interval`, default 15s; one bucket per minute): for a cluster where `konmon run` does not run. Short windows miss daily peaks.
+- `--live 30m` samples the cluster itself for that long instead of reading a database (`--live-interval`, default 15s; one bucket per minute): for a cluster where `konmon run` does not run. Short windows miss daily peaks. Ctrl-C ends sampling early and still prints the suggestions.
+- Jobs and CronJobs have data only while they run: for them `--min-hours` applies to the span from the first to the last run.
 
+## Coming from check-conditions
 
 
 konmon contains all checks of [check-conditions](https://github.com/guettli/check-conditions): the `conditions` check with its polarity tables and ignore list, `deletion-timestamp` and `pod-container-restarts`. Run `konmon check` where you ran `check-conditions all`:

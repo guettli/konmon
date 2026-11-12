@@ -23,8 +23,10 @@ import (
 )
 
 // collectUsage samples the metrics API every interval and adds the samples
-// to hourly usage buckets, for `konmon suggest-requests`. Without the metrics
-// API (no metrics-server) it logs once and keeps trying.
+// to hourly usage buckets, for `konmon suggest-requests`. Pods pods does not
+// know (excluded, or not synced yet) are skipped. Without the metrics API (no
+// metrics-server) it logs once and keeps trying. It never returns an error:
+// konmon run must not stop over usage data.
 func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, pods usage.PodLookup, interval time.Duration, log *slog.Logger) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -34,8 +36,13 @@ func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, p
 		case <-ctx.Done():
 			return nil
 		case now := <-t.C:
+			msg := "cannot read container usage from the metrics API; suggest-requests gets no data until this works"
 			samples, err := usage.Fetch(ctx, dyn, "", pods)
+			if apierrors.IsNotFound(err) {
+				msg = "metrics API (metrics.k8s.io) not available, install metrics-server; suggest-requests gets no data until then"
+			}
 			if err == nil {
+				msg = "cannot store container usage"
 				err = st.Update(ctx, func(tx *store.Tx) error {
 					return tx.AddUsage(now.UTC().Truncate(time.Hour), samples)
 				})
@@ -45,10 +52,6 @@ func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, p
 				return nil
 			case err != nil && !failing:
 				failing = true
-				msg := "cannot read container usage; suggest-requests gets no data until this works"
-				if apierrors.IsNotFound(err) {
-					msg = "metrics API (metrics.k8s.io) not available, install metrics-server; suggest-requests gets no data until then"
-				}
 				log.Warn(msg, "err", err)
 			case err == nil && failing:
 				failing = false
@@ -85,7 +88,8 @@ use, rounded up to 5m; memory request = the highest memory use seen plus
 sample: a request is per Pod.
 
 DATA is the number of hours with samples (minutes with --live). Workloads
-with less than --min-hours of it get no suggestion: a day
+with less than --min-hours of it get no suggestion; for Jobs and CronJobs
+the time span from their first to their last run counts instead. A day
 covers the daily load pattern, a week the weekly one. A workload which does
 real work only now and then (a nightly job) needs a window that contains it.
 
@@ -178,7 +182,11 @@ func suggest(ctx context.Context, w, errW io.Writer) error {
 		}
 		bucketSize = time.Hour
 		current = func(kind, namespace, name string) map[string]any {
-			raw, err := st.ObjectJSON(ctx, kind, namespace, name)
+			gvr, ok := workloadResources[kind]
+			if !ok {
+				return nil
+			}
+			raw, err := st.ObjectJSON(ctx, gvr.GroupResource(), namespace, name)
 			if err != nil || raw == nil {
 				return nil
 			}
@@ -193,7 +201,14 @@ func suggest(ctx context.Context, w, errW io.Writer) error {
 	rows := make([]suggestion, 0)
 	for _, s := range usage.Summarize(buckets, rule) {
 		hours := float64(s.Buckets) * bucketSize.Hours()
-		r := suggestion{Stats: s, Hours: hours, Enough: o.live > 0 || hours >= float64(o.minHours)}
+		enough := hours >= float64(o.minHours)
+		if usage.Batch(s.Kind) {
+			// A nightly job has one hour of data per day: judge the span
+			// its runs cover instead.
+			span := s.Last.Sub(s.First) + bucketSize
+			enough = span.Hours() >= float64(o.minHours)
+		}
+		r := suggestion{Stats: s, Hours: hours, Enough: o.live > 0 || enough}
 		if obj := current(s.Kind, s.Namespace, s.Workload); obj != nil {
 			r.CurrentCPU, r.CurrentMem = currentRequests(obj, s.Container)
 		}
@@ -223,6 +238,7 @@ var workloadResources = map[string]schema.GroupVersionResource{
 	"CronJob":     {Group: "batch", Version: "v1", Resource: "cronjobs"},
 	"Job":         {Group: "batch", Version: "v1", Resource: "jobs"},
 	"Pod":         {Version: "v1", Resource: "pods"},
+	"Rollout":     {Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"},
 }
 
 // sampleLive samples the metrics API for --live, into one bucket per minute.
@@ -274,10 +290,15 @@ func sampleLive(ctx context.Context, errW io.Writer, dyn dynamic.Interface) ([]u
 		if !time.Now().Add(o.liveInterval).Before(deadline) {
 			break
 		}
+		stopped := false
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			// Ctrl-C: suggest from what was sampled so far.
+			stopped = true
 		case <-t.C:
+		}
+		if stopped {
+			break
 		}
 	}
 	_, _ = fmt.Fprintf(errW, "%d samples taken.\n", n)
