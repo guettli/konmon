@@ -1,4 +1,4 @@
-// Reports unhealthy entries of status.conditions.
+// Reports unhealthy entries of status.conditions; a failed Job of a CronJob (and its Pod) only until a newer run succeeded.
 //
 // Ported from check-conditions (github.com/guettli/check-conditions). The
 // hard part of a generic condition check is polarity: for most condition
@@ -281,6 +281,40 @@ function hasRestarts(pod: KubeObject): boolean {
   return false;
 }
 
+// A Job of a CronJob whose failure is history: a newer Job of the same
+// CronJob completed successfully. The failed Job (and its Pod) stays until
+// failedJobsHistoryLimit drops it, which kept alerts open for days after
+// the next scheduled run was green. Still reported: a failed Job while no
+// newer run has succeeded yet, and failed Jobs not created by a CronJob.
+const controller = (obj: KubeObject, kind: string) =>
+  (obj.metadata.ownerReferences ?? []).find((r) => r.controller && r.kind === kind);
+
+const succeeded = (job: KubeObject) =>
+  (job.status?.conditions ?? []).some(
+    (c: Condition) => (c.type === "Complete" || c.type === "SuccessCriteriaMet") && c.status === "True",
+  );
+
+function supersededJob(job: KubeObject, ctx: { list: (r: string, o: object) => KubeObject[] }): boolean {
+  const cronJob = controller(job, "CronJob");
+  if (!cronJob) return false;
+  const created = job.metadata.creationTimestamp ?? "";
+  return ctx
+    .list("jobs.batch", { namespace: job.metadata.namespace, owner: cronJob.uid })
+    .some((j) => (j.metadata.creationTimestamp ?? "") > created && succeeded(j));
+}
+
+function superseded(obj: KubeObject, resource: string, group: string, ctx: any): boolean {
+  if (!ctx.has("jobs.batch")) return false;
+  if (resource === "jobs" && group === "batch") return supersededJob(obj, ctx);
+  if (resource === "pods") {
+    const owner = controller(obj, "Job");
+    if (!owner) return false;
+    const job = ctx.get("jobs.batch", obj.metadata.namespace ?? null, owner.name);
+    return job !== null && job.metadata.uid === owner.uid && supersededJob(job, ctx);
+  }
+  return false;
+}
+
 export default defineCheck({
   name: "conditions",
   match: {
@@ -301,6 +335,7 @@ export default defineCheck({
       "cronjobs.batch",
     ],
   },
+  reads: ["jobs.batch"],
   params: {
     // A Pod which has not restarted yet may have Ready=False,
     // ContainersReady=False and Initialized=False for this long while it
@@ -320,6 +355,7 @@ export default defineCheck({
       return [{ key: "invalid", message: "status.conditions is not a list" }];
     }
     const conditions = raw as Condition[];
+    if (superseded(obj, resource, ctx.resource.group, ctx)) return [];
 
     let rows: Row[] = [];
     for (const c of conditions) {

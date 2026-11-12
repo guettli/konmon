@@ -9,7 +9,7 @@ Health findings can alert; hygiene findings are only recorded and printed. Disab
 | Check | Category | Severity | Default | Reports | Parameters (`--check-param`) | From |
 |---|---|---|---|---|---|---|
 | [`admission-policy-missing`](../checks/admission-policy-missing.ts) | health | warning | on | ValidatingAdmissionPolicyBindings whose policy does not exist |  | k8sgpt |
-| [`conditions`](../checks/conditions.ts) | health | warning | on | unhealthy entries of status.conditions | `podStartGraceSeconds=30` `rules` | check-conditions |
+| [`conditions`](../checks/conditions.ts) | health | warning | on | unhealthy entries of status.conditions; a failed Job of a CronJob (and its Pod) only until a newer run succeeded | `podStartGraceSeconds=30` `rules` | check-conditions |
 | [`configmap-key-missing`](../checks/configmap-key-missing.ts) | health | warning | on | Pods which reference a ConfigMap, or a key of it, which does not exist (and is not optional): the container cannot start |  | Popeye |
 | [`cronjob-never-succeeded`](../checks/cronjob-never-succeeded.ts) | health | warning | on | CronJobs which have run but never succeeded, while their newest Job failed |  | Popeye |
 | [`deletion-timestamp`](../checks/deletion-timestamp.ts) | health | warning | on | objects which have been in deletion for too long: usually a finalizer whose controller is gone or failing | `olderThanSeconds=600` | check-conditions |
