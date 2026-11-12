@@ -2,7 +2,7 @@ module github.com/guettli/konmon
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/dop251/goja v0.0.0-20261009203008-ac6c29549738
