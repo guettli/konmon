@@ -1,0 +1,368 @@
+check: orphaned
+cases:
+  # Orphans.
+  - name: hand-made ConfigMap
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: settings, namespace: app, creationTimestamp: "2025-12-01T00:00:00Z"}
+    expect:
+      - {message: not managed by a controller or GitOps tool, since: "2025-12-01T00:00:00Z"}
+  - name: hand-made Secret with a kubernetes.io label only
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: hand-made, namespace: app, labels: {kubernetes.io/legacy-token-last-used: "2025-12-01"}}
+      data: {key: dmFsdWU=}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: Flux label while Flux is not installed (stale)
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: settings, namespace: app, labels: {kustomize.toolkit.fluxcd.io/name: app}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: flux kustomization app"}
+  - name: plain helm install, with hints
+    resource: deployments.apps
+    object:
+      kind: Deployment
+      metadata:
+        name: web
+        namespace: app
+        labels: {app.kubernetes.io/managed-by: Helm}
+        annotations: {meta.helm.sh/release-name: web, meta.helm.sh/release-namespace: app}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: helm release app/web"}
+  - name: kubectl apply hint (Secrets lose this annotation, other kinds keep it)
+    resource: services
+    object:
+      kind: Service
+      metadata: {name: web, namespace: app, annotations: {kubectl.kubernetes.io/last-applied-configuration: "{}"}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: kubectl apply"}
+  - name: hand-made Certificate, a CR which is not on the skip list
+    resource: certificates.cert-manager.io
+    object:
+      kind: Certificate
+      metadata: {name: web, namespace: app}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: Ingress with an annotation cert-manager reads, but does not own
+    resource: ingresses.networking.k8s.io
+    available: [certificates.cert-manager.io]
+    object:
+      kind: Ingress
+      metadata: {name: web, namespace: app, annotations: {cert-manager.io/cluster-issuer: letsencrypt}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: old Pod without owner
+    resource: pods
+    now: "2026-01-01T12:00:00Z"
+    object:
+      kind: Pod
+      metadata: {name: debug, namespace: app, creationTimestamp: "2026-01-01T09:00:00Z"}
+    expect:
+      - {message: "Pod without owner, older than 2h"}
+  - name: empty ignore annotation does not exempt
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, annotations: {korphan.guettli.github.io/ignore: " "}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; korphan.guettli.github.io/ignore is empty, give a reason"}
+  - name: Rancher RBAC label without Rancher installed
+    resource: rolebindings.rbac.authorization.k8s.io
+    object:
+      kind: RoleBinding
+      metadata: {name: rb, namespace: app, labels: {authz.cluster.cattle.io/rtb-owner-updated: p-abc_prtb-xyz}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: rancher rtb p-abc/prtb-xyz"}
+
+  # Managed.
+  - name: owned
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata:
+        name: x
+        namespace: app
+        ownerReferences: [{apiVersion: apps/v1, kind: Deployment, name: web, uid: u1}]
+    expect: []
+  - name: Flux label while Flux is installed
+    resource: configmaps
+    available: [kustomizations.kustomize.toolkit.fluxcd.io]
+    object:
+      kind: ConfigMap
+      metadata: {name: settings, namespace: app, labels: {kustomize.toolkit.fluxcd.io/name: app}}
+    expect: []
+  - name: Argo CD tracking annotation
+    resource: services
+    available: [applications.argoproj.io]
+    object:
+      kind: Service
+      metadata: {name: web, namespace: app, annotations: {argocd.argoproj.io/tracking-id: "web:/Service:app/web"}}
+    expect: []
+  - name: objectset hash (k3s deploy controller), always
+    resource: deployments.apps
+    object:
+      kind: Deployment
+      metadata: {name: coredns, namespace: app, labels: {objectset.rio.cattle.io/hash: abc}}
+    expect: []
+  - name: TLS Secret of a cert-manager Certificate
+    resource: secrets
+    available: [certificates.cert-manager.io]
+    object:
+      kind: Secret
+      metadata: {name: web-tls, namespace: app, annotations: {cert-manager.io/certificate-name: web}}
+    expect: []
+  - name: cert-manager PKI
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: acme-key, namespace: cert-manager, labels: {app.kubernetes.io/managed-by: cert-manager}}
+    expect: []
+  - name: Secret of a Flux GitRepository
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: flux-system, namespace: flux-system}
+    related:
+      - resource: gitrepositories.source.toolkit.fluxcd.io
+        object:
+          kind: GitRepository
+          metadata: {name: flux-system, namespace: flux-system, labels: {kustomize.toolkit.fluxcd.io/name: flux-system}}
+          spec: {secretRef: {name: flux-system}}
+    expect: []
+  - name: SOPS key of a Flux Kustomization
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: sops-age, namespace: flux-system}
+    related:
+      - resource: kustomizations.kustomize.toolkit.fluxcd.io
+        object:
+          kind: Kustomization
+          metadata: {name: apps, namespace: flux-system, labels: {kustomize.toolkit.fluxcd.io/name: flux-system}}
+          spec: {decryption: {provider: sops, secretRef: {name: sops-age}}}
+    expect: []
+  - name: Secret named like a Flux secretRef in another namespace is not a credential
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: flux-system, namespace: app}
+    related:
+      - resource: gitrepositories.source.toolkit.fluxcd.io
+        object:
+          kind: GitRepository
+          metadata: {name: flux-system, namespace: flux-system, labels: {kustomize.toolkit.fluxcd.io/name: flux-system}}
+          spec: {secretRef: {name: flux-system}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: Argo CD credential
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: repo, namespace: argocd, labels: {argocd.argoproj.io/secret-type: repository}}
+    expect: []
+  - name: helm release storage
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: sh.helm.release.v1.web.v3, namespace: app}
+    expect: []
+  - name: liqo kind on the skip list
+    resource: foreignclusters.core.liqo.io
+    version: v1beta1
+    object:
+      kind: ForeignCluster
+      metadata: {name: hcloud}
+    expect: []
+  - name: label in the domain of an installed operator
+    resource: secrets
+    available: [virtualnodes.offloading.liqo.io]
+    object:
+      kind: Secret
+      metadata: {name: reflected, namespace: app, labels: {offloading.liqo.io/origin: hcloud}}
+    expect: []
+  - name: liqo parent domain matches a child group
+    resource: configurations.networking.liqo.io
+    version: v1beta1
+    object:
+      kind: Configuration
+      metadata: {name: cluster, namespace: liqo-tenant-x, labels: {liqo.io/remote-cluster-id: x}}
+    expect: []
+  - name: Reloader meta-info ConfigMap
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: reloader-meta-info, namespace: app, labels: {reloader.stakater.com/meta-info: "true"}}
+    expect: []
+  - name: Rancher RBAC while Rancher is installed
+    resource: rolebindings.rbac.authorization.k8s.io
+    available: [clusters.management.cattle.io]
+    object:
+      kind: RoleBinding
+      metadata: {name: rb, namespace: app, labels: {p-abc_prtb-xyz: membership-binding-owner}}
+    expect: []
+  - name: Rancher-looking value under a hand-written key is not Rancher
+    resource: rolebindings.rbac.authorization.k8s.io
+    available: [clusters.management.cattle.io]
+    object:
+      kind: RoleBinding
+      metadata: {name: rb, namespace: app, labels: {team: owner-user}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: young Pod without owner (debugging)
+    resource: pods
+    now: "2026-01-01T12:00:00Z"
+    object:
+      kind: Pod
+      metadata: {name: debug, namespace: app, creationTimestamp: "2026-01-01T11:30:00Z"}
+    expect: []
+  - name: ignore annotation with a reason
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, annotations: {korphan.guettli.github.io/ignore: "migrated by hand, ticket 42"}}
+    expect: []
+
+  # Created by the control plane, the kubelet or the distribution.
+  - name: anything in kube-system
+    resource: serviceaccounts
+    object:
+      kind: ServiceAccount
+      metadata: {name: deployment-controller, namespace: kube-system}
+    expect: []
+  - name: Node
+    resource: nodes
+    object:
+      kind: Node
+      metadata: {name: worker-1}
+    expect: []
+  - name: system Namespace
+    resource: namespaces
+    object:
+      kind: Namespace
+      metadata: {name: default}
+    expect: []
+  - name: a hand-made Namespace is an orphan
+    resource: namespaces
+    object:
+      kind: Namespace
+      metadata: {name: app}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: system ClusterRole
+    resource: clusterroles.rbac.authorization.k8s.io
+    object:
+      kind: ClusterRole
+      metadata: {name: "system:controller:foo"}
+    expect: []
+  - name: bootstrap RBAC
+    resource: clusterroles.rbac.authorization.k8s.io
+    object:
+      kind: ClusterRole
+      metadata: {name: view, labels: {kubernetes.io/bootstrapping: rbac-defaults}}
+    expect: []
+  - name: aggregated ClusterRole
+    resource: clusterroles.rbac.authorization.k8s.io
+    object:
+      kind: ClusterRole
+      metadata: {name: monitoring}
+      aggregationRule: {clusterRoleSelectors: [{matchLabels: {rbac.example.com/aggregate-to-monitoring: "true"}}]}
+    expect: []
+  - name: root CA ConfigMap, also reflected by liqo
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: kube-root-ca.crt.hcloud, namespace: app}
+    expect: []
+  - name: default ServiceAccount
+    resource: serviceaccounts
+    object:
+      kind: ServiceAccount
+      metadata: {name: default, namespace: app}
+    expect: []
+  - name: kubernetes Service
+    resource: services
+    object:
+      kind: Service
+      metadata: {name: kubernetes, namespace: default}
+    expect: []
+  - name: dynamically provisioned PV
+    resource: persistentvolumes
+    object:
+      kind: PersistentVolume
+      metadata: {name: pvc-123, annotations: {pv.kubernetes.io/provisioned-by: rancher.io/local-path}}
+    expect: []
+  - name: IPAddress
+    resource: ipaddresses.networking.k8s.io
+    object:
+      kind: IPAddress
+      metadata: {name: 10.43.0.1}
+    expect: []
+  - name: k3s CRD
+    resource: customresourcedefinitions.apiextensions.k8s.io
+    object:
+      kind: CustomResourceDefinition
+      metadata: {name: addons.k3s.cattle.io}
+    expect: []
+  - name: k3s HelmChart
+    resource: helmcharts.helm.cattle.io
+    object:
+      kind: HelmChart
+      metadata: {name: traefik, namespace: app}
+    expect: []
+  - name: static Pod
+    resource: pods
+    object:
+      kind: Pod
+      metadata: {name: kube-apiserver-cp, namespace: app, annotations: {kubernetes.io/config.mirror: abc}}
+    expect: []
+
+  # Params.
+  - name: managerAnnotations accepts plain helm installs
+    resource: deployments.apps
+    params: {managerAnnotations: [meta.helm.sh/release-name]}
+    object:
+      kind: Deployment
+      metadata: {name: web, namespace: app, annotations: {meta.helm.sh/release-name: web}}
+    expect: []
+  - name: managerLabels
+    resource: configmaps
+    params: {managerLabels: [my.company/owned-by]}
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {my.company/owned-by: team}}
+    expect: []
+  - name: skipKinds
+    resource: widgets.example.com
+    params: {skipKinds: [example.com/Widget]}
+    object:
+      kind: Widget
+      metadata: {name: w, namespace: app}
+    expect: []
+  - name: ignoreNames
+    resource: configmaps
+    params: {ignoreNames: ["tmp-*"]}
+    object:
+      kind: ConfigMap
+      metadata: {name: tmp-scratch, namespace: app}
+    expect: []
+  - name: maxDebugPodAge
+    resource: jobs.batch
+    now: "2026-01-01T12:00:00Z"
+    params: {maxDebugPodAge: 30m}
+    object:
+      kind: Job
+      metadata: {name: once, namespace: app, creationTimestamp: "2026-01-01T11:00:00Z"}
+    expect:
+      - {message: "Job without owner, older than 30m"}
+  - name: bad maxDebugPodAge
+    resource: pods
+    params: {maxDebugPodAge: two hours}
+    object:
+      kind: Pod
+      metadata: {name: debug, namespace: app}
+    expectError: maxDebugPodAge

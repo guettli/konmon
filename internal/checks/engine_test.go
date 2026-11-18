@@ -792,3 +792,30 @@ func TestTestItemStripsSecretsToMetadata(t *testing.T) {
 		t.Errorf("got %v", it.Obj.Object)
 	}
 }
+
+func TestResourcesListsReadableAvailableTypes(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "types",
+  match: { resources: ["pods"] },
+  reads: ["services"],
+  check(pod, ctx) { return [{ message: ctx.resources().join(",") }]; },
+});`)
+	jobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	res := evaluate(t, e, []Item{pod("a")}, podsGVR, servicesGVR, secretsGVR, jobs)
+	if len(res.Findings) != 1 || res.Findings[0].Message != "pods,services" {
+		t.Errorf("findings %+v, failures %v", res.Findings, res.Failures)
+	}
+	e = load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "types",
+  match: { resources: ["*"] },
+  check(obj, ctx) { return [{ message: ctx.resources().join(",") }]; },
+});`)
+	res = evaluate(t, e, []Item{pod("a")}, podsGVR, servicesGVR, secretsGVR, jobs)
+	if len(res.Findings) != 1 || res.Findings[0].Message != "jobs.batch,pods,services" {
+		t.Errorf("findings %+v, failures %v", res.Findings, res.Failures)
+	}
+}

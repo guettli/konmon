@@ -98,6 +98,12 @@ declare module "konmon" {
     list(resource: string, options?: ListOptions): KubeObject[];
     /** Whether a resource type is available (e.g. an optional CRD). */
     has(resource: string): boolean;
+    /**
+     * The available resource types the check may read, sorted, as
+     * "resource.group" ("pods" for the core group): e.g. to tell which
+     * operators are installed.
+     */
+    resources(): string[];
     readonly history: {
       /** Condition changes of an object. Needs uses: ["history"]. */
       conditions(obj: KubeObject | string, since?: Date): ConditionChange[];

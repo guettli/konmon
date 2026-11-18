@@ -98,7 +98,7 @@ func checksTable(path string) error {
 	return os.WriteFile(path, []byte(text), 0o644) //nolint:gosec // a doc in the repo, the path is a constant
 }
 
-var projects = regexp.MustCompile(`check-conditions|k8sgpt|Popeye`)
+var projects = regexp.MustCompile(`check-conditions|k8sgpt|korphan|Popeye`)
 
 // describe takes the first sentence of the header comment of a check
 // ("// Reports X: details.") and the projects it was ported from.

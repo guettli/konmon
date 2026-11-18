@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -179,6 +180,20 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			return false
 		}
 		return rt.snap.Available(gr)
+	})
+	rt.set(ctx, "resources", func() goja.Value {
+		names := make([]string, 0, len(rt.snap.available))
+		for gr := range rt.snap.available {
+			if lc.def.canRead(gr) {
+				names = append(names, FormatResource(gr))
+			}
+		}
+		sort.Strings(names)
+		vals := make([]any, len(names))
+		for i, n := range names {
+			vals[i] = n
+		}
+		return vm.NewArray(vals...)
 	})
 	rt.set(ctx, "get", func(resource string, namespace goja.Value, name string) goja.Value {
 		gr := rt.readable(lc, resource)
