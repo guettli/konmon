@@ -787,10 +787,13 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 		client, watchListFrom, objType = metadataClient{w.Metadata.Resource(gvr)}, w.Metadata, &metav1.PartialObjectMetadata{}
 		kind := w.kind(gvr)
 		transform = func(obj any) (any, error) {
-			if m, ok := obj.(*metav1.PartialObjectMetadata); ok {
-				return metadataObject(gvr, kind, m)
+			switch o := obj.(type) {
+			case *metav1.PartialObjectMetadata:
+				return metadataObject(gvr, kind, o)
+			case *unstructured.Unstructured:
+				return StripToMetadata(o), nil // stripping twice is harmless
 			}
-			return obj, nil // a tombstone, its object is converted already
+			return obj, nil // a tombstone: its object comes from the store, stripped
 		}
 	}
 	lw := &cache.ListWatch{

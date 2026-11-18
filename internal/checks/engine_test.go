@@ -508,12 +508,13 @@ func TestWatchAndStore(t *testing.T) {
 func TestSecretsOnlyForChecksWhichNameThem(t *testing.T) {
 	secrets := secretsGVR.GroupResource()
 	for _, tc := range []struct {
-		name, def     string
-		watch, stored bool
+		name, def                string
+		watch, stored, dependsOn bool
 	}{
-		{"match *", `match: { resources: ["*"] }`, false, false},
-		{"match secrets", `match: { resources: ["*", "secrets"] }`, true, true},
-		{"reads secrets", `match: { resources: ["pods"] }, reads: ["secrets"]`, true, false},
+		{"match *", `match: { resources: ["*"] }`, false, false, false},
+		{"match secrets", `match: { resources: ["secrets"] }`, true, true, true},
+		{"match * and secrets", `match: { resources: ["*", "secrets"] }`, true, true, true},
+		{"reads secrets", `match: { resources: ["pods"] }, reads: ["secrets"]`, true, false, true},
 	} {
 		e, err := Load(nil, []Source{{Path: "x.ts", Code: `export default { name: "x", ` + tc.def + `, check() { return []; } };`}}, Options{})
 		if err != nil {
@@ -525,6 +526,27 @@ func TestSecretsOnlyForChecksWhichNameThem(t *testing.T) {
 		if got := e.Store(secrets); got != tc.stored {
 			t.Errorf("%s: Store = %v", tc.name, got)
 		}
+		if got := e.defs[0].DependsOn(secrets); got != tc.dependsOn {
+			t.Errorf("%s: DependsOn = %v", tc.name, got)
+		}
+	}
+}
+
+func TestCheckOnAllTypesMayNotReadSecrets(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "all",
+  match: { resources: ["*"] },
+  check(obj, ctx) {
+    let err = "";
+    try { ctx.list("secrets"); } catch (e) { err = String(e); }
+    return [{ message: String(err.includes("may not read")) }];
+  },
+});`)
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Findings) != 1 || res.Findings[0].Message != "true" {
+		t.Errorf("findings %+v, failures %v", res.Findings, res.Failures)
 	}
 }
 

@@ -21,7 +21,8 @@ func Denied(gr schema.GroupResource) bool {
 }
 
 // MetadataOnly reports whether konmon reads only the metadata of a type:
-// Secrets. Their data never reaches konmon.
+// Secrets. The API server never sends their data; the last-applied
+// annotation, which holds a copy of it, is dropped on arrival.
 func MetadataOnly(gr schema.GroupResource) bool {
 	for _, m := range metadataOnly {
 		if m == gr {
@@ -80,6 +81,12 @@ func parseResourceSet(patterns []string, allowAll bool) (resourceSet, error) {
 		rs.set[gr] = struct{}{}
 	}
 	return rs, nil
+}
+
+// named reports whether the set lists the type itself, not only by "*".
+func (rs resourceSet) named(gr schema.GroupResource) bool {
+	_, ok := rs.set[gr]
+	return ok
 }
 
 func (rs resourceSet) contains(gr schema.GroupResource) bool {

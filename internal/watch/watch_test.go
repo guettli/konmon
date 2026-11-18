@@ -514,6 +514,15 @@ func TestMetadataOnlyTypesAreWatchedWithTheMetadataAPI(t *testing.T) {
 	checkMetadataOnly(t, up.Obj, "b")
 	if obj, synced := w.Get(secretsGVR.GroupResource(), "ns", "b"); !synced || obj == nil {
 		t.Errorf("Get(b) = %v, synced %t", obj, synced)
+	} else {
+		checkMetadataOnly(t, obj, "b")
+	}
+
+	if err := meta.Resource(secretsGVR).Namespace("ns").Delete(ctx, "a", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if del, ok := next(t, events).(Delete); !ok || del.UID != "uid-a" {
+		t.Fatalf("want Delete of uid-a, got %#v", del)
 	}
 }
 

@@ -115,11 +115,18 @@ declare module "konmon" {
     /** false: the check is off by default and runs only with --enable-check. */
     enabled?: boolean;
     match: {
-      /** "*", "pods", "deployments.apps", "ingresses.networking.k8s.io", ... */
+      /**
+       * "*", "pods", "deployments.apps", "ingresses.networking.k8s.io", ...
+       * "*" does not include "secrets": name them. Secrets are metadata only
+       * (apiVersion, kind, metadata; no data).
+       */
       resources: string[];
       exclude?: string[];
     };
-    /** Other resource types the check reads with ctx.get/ctx.list. */
+    /**
+     * Other resource types the check reads with ctx.get/ctx.list. Secrets
+     * are metadata only (apiVersion, kind, metadata; no data).
+     */
     reads?: string[];
     uses?: "history"[];
     /**
