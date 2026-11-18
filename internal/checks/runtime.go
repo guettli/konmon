@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -50,6 +51,9 @@ type jsRuntime struct {
 	// pendingHas: the current call asked ctx.has about a pending type and
 	// got false, or caught the error of reading one.
 	pendingHas error
+	// resources: the result of ctx.resources() per check, for one
+	// evaluation.
+	resources map[*loadedCheck]goja.Value
 	// Saved before any check code runs: a check may replace the globals.
 	freezeFn goja.Callable
 	dateCtor *goja.Object
@@ -125,6 +129,7 @@ func (rt *jsRuntime) log(call goja.FunctionCall) goja.Value {
 // begin prepares the runtime for one evaluation: one ctx base per check.
 func (rt *jsRuntime) begin(snap *Snapshot, hist History, now time.Time) {
 	rt.snap, rt.hist, rt.now = snap, hist, now
+	rt.resources = map[*loadedCheck]goja.Value{}
 	rt.broken = nil
 	defer func() {
 		if r := recover(); r != nil {
@@ -179,6 +184,38 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			return false
 		}
 		return rt.snap.Available(gr)
+	})
+	rt.set(ctx, "resources", func() goja.Value {
+		// The same frozen array for all calls of an evaluation, so a check
+		// can cache what it derives from it.
+		if v, ok := rt.resources[lc]; ok {
+			return v
+		}
+		// A pending type exists, its objects are only not known yet:
+		// reading it throws, and the findings of the object are kept.
+		seen := map[schema.GroupResource]bool{}
+		var names []string
+		add := func(gr schema.GroupResource) {
+			if !seen[gr] && lc.def.canRead(gr) {
+				seen[gr] = true
+				names = append(names, FormatResource(gr))
+			}
+		}
+		for gr := range rt.snap.available {
+			add(gr)
+		}
+		for gr := range rt.snap.pending {
+			add(gr)
+		}
+		sort.Strings(names)
+		vals := make([]any, len(names))
+		for i, n := range names {
+			vals[i] = n
+		}
+		arr := vm.NewArray(vals...)
+		rt.freeze(arr)
+		rt.resources[lc] = arr
+		return arr
 	})
 	rt.set(ctx, "get", func(resource string, namespace goja.Value, name string) goja.Value {
 		gr := rt.readable(lc, resource)

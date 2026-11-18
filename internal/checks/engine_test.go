@@ -792,3 +792,67 @@ func TestTestItemStripsSecretsToMetadata(t *testing.T) {
 		t.Errorf("got %v", it.Obj.Object)
 	}
 }
+
+func TestResourcesListsReadableAvailableTypes(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "types",
+  match: { resources: ["pods"] },
+  reads: ["services"],
+  check(pod, ctx) { return [{ message: ctx.resources().join(",") }]; },
+});`)
+	jobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	res := evaluate(t, e, []Item{pod("a")}, podsGVR, servicesGVR, secretsGVR, jobs)
+	if len(res.Findings) != 1 || res.Findings[0].Message != "pods,services" {
+		t.Errorf("findings %+v, failures %v", res.Findings, res.Failures)
+	}
+	e = load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "types",
+  match: { resources: ["*"] },
+  check(obj, ctx) { return [{ message: ctx.resources().join(",") }]; },
+});`)
+	res = evaluate(t, e, []Item{pod("a")}, podsGVR, servicesGVR, secretsGVR, jobs)
+	if len(res.Findings) != 1 || res.Findings[0].Message != "jobs.batch,pods,services" {
+		t.Errorf("findings %+v, failures %v", res.Findings, res.Failures)
+	}
+}
+
+func TestResourcesIncludesPendingTypesAndIsCached(t *testing.T) {
+	// One worker: each worker has its own runtime and cache.
+	e, err := Load(nil, []Source{{Path: "test.ts", Code: `
+import { defineCheck } from "konmon";
+let previous = null;
+export default defineCheck({
+  name: "types",
+  match: { resources: ["*"] },
+  check(obj, ctx) {
+    const r = ctx.resources();
+    const same = previous === r;
+    previous = r;
+    let frozen = false;
+    try { r.push("x"); } catch (e) { frozen = true; }
+    return [{ message: [r.join(","), same, frozen].join(" ") }];
+  },
+});`}}, Options{Timeout: time.Second, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	snap := NewSnapshot([]Item{pod("a"), pod("b")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetPending(jobs.GroupResource())
+	res, err := e.Evaluate(context.Background(), snap, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(res.Findings))
+	for _, f := range res.Findings {
+		got = append(got, f.Message)
+	}
+	slices.Sort(got)
+	if want := []string{"jobs.batch,pods false true", "jobs.batch,pods true true"}; !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q (failures %v)", got, want, res.Failures)
+	}
+}
