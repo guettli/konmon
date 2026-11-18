@@ -18,6 +18,7 @@ import (
 	watchapi "k8s.io/apimachinery/pkg/watch"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
+	fakemetadata "k8s.io/client-go/metadata/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -413,5 +414,152 @@ func TestListOnceListsPerNamespaceWhenAllNamespacesIsForbidden(t *testing.T) {
 	}
 	if got := res.ForbiddenIn["typo"]; len(got) != 1 || got[0] != jobsGVR {
 		t.Errorf("forbidden in %v", res.ForbiddenIn)
+	}
+}
+
+var secretsGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+
+func newSecretMetadata(name, uid string) *metav1.PartialObjectMetadata {
+	return &metav1.PartialObjectMetadata{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns", Name: name, UID: types.UID(uid),
+			Labels:        map[string]string{"app": "web"},
+			Annotations:   map[string]string{lastApplied: `{"data":{"key":"dmFsdWU="}}`, "keep": "me"},
+			ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl"}},
+		},
+	}
+}
+
+func newFakeMetadata(objs ...runtime.Object) *fakemetadata.FakeMetadataClient {
+	scheme := fakemetadata.NewTestScheme()
+	if err := metav1.AddMetaToScheme(scheme); err != nil {
+		panic(err)
+	}
+	return fakemetadata.NewSimpleMetadataClient(scheme, objs...)
+}
+
+func secretsWatcher(meta *fakemetadata.FakeMetadataClient, events chan any) *Watcher {
+	scheme := runtime.NewScheme()
+	// The dynamic client has the full Secret: it must never be used.
+	full := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"namespace": "ns", "name": "full", "uid": "uid-full"},
+		"data":     map[string]any{"key": "dmFsdWU="},
+	}}
+	dyn := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{secretsGVR: "SecretList"}, full)
+	disc := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	disc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "v1",
+		APIResources: []metav1.APIResource{
+			{Name: "secrets", Namespaced: true, Kind: "Secret", Verbs: []string{"get", "list", "watch"}},
+		},
+	}}
+	w := &Watcher{
+		Dynamic:      dyn,
+		Discovery:    disc,
+		MetadataOnly: func(gr schema.GroupResource) bool { return gr == secretsGVR.GroupResource() },
+		Events:       events,
+		Log:          slog.New(slog.DiscardHandler),
+	}
+	if meta != nil {
+		w.Metadata = meta
+	}
+	return w
+}
+
+func checkMetadataOnly(t *testing.T, u *unstructured.Unstructured, name string) {
+	t.Helper()
+	if u.GetName() != name || u.GetKind() != "Secret" || u.GetAPIVersion() != "v1" {
+		t.Errorf("got %s %s/%s", u.GetAPIVersion(), u.GetKind(), u.GetName())
+	}
+	for k := range u.Object {
+		if k != "apiVersion" && k != "kind" && k != "metadata" {
+			t.Errorf("field %q of a metadata-only object", k)
+		}
+	}
+	if _, ok := u.GetAnnotations()[lastApplied]; ok || u.GetAnnotations()["keep"] != "me" {
+		t.Errorf("annotations %v", u.GetAnnotations())
+	}
+	if len(u.GetManagedFields()) != 0 || u.GetLabels()["app"] != "web" {
+		t.Errorf("managedFields %v, labels %v", u.GetManagedFields(), u.GetLabels())
+	}
+}
+
+func TestMetadataOnlyTypesAreWatchedWithTheMetadataAPI(t *testing.T) {
+	meta := newFakeMetadata(newSecretMetadata("a", "uid-a"))
+	events := make(chan any, 100)
+	w := secretsWatcher(meta, events)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = w.Run(ctx, time.Hour) }()
+
+	up, ok := next(t, events).(Upsert)
+	if !ok || up.GVR != secretsGVR {
+		t.Fatalf("want Upsert of a, got %#v", up)
+	}
+	checkMetadataOnly(t, up.Obj, "a")
+	if _, ok := next(t, events).(Synced); !ok {
+		t.Fatal("want Synced")
+	}
+
+	if _, err := meta.Resource(secretsGVR).Namespace("ns").(fakemetadata.MetadataClient).CreateFake(newSecretMetadata("b", "uid-b"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	up, ok = next(t, events).(Upsert)
+	if !ok {
+		t.Fatalf("want Upsert of b, got %#v", up)
+	}
+	checkMetadataOnly(t, up.Obj, "b")
+	if obj, synced := w.Get(secretsGVR.GroupResource(), "ns", "b"); !synced || obj == nil {
+		t.Errorf("Get(b) = %v, synced %t", obj, synced)
+	} else {
+		checkMetadataOnly(t, obj, "b")
+	}
+
+	if err := meta.Resource(secretsGVR).Namespace("ns").Delete(ctx, "a", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if del, ok := next(t, events).(Delete); !ok || del.UID != "uid-a" {
+		t.Fatalf("want Delete of uid-a, got %#v", del)
+	}
+}
+
+func TestListOnceListsMetadataOnlyTypesWithTheMetadataAPI(t *testing.T) {
+	meta := newFakeMetadata(newSecretMetadata("a", "uid-a"))
+	res, err := secretsWatcher(meta, nil).ListOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 1 || len(res.Available) != 1 {
+		t.Fatalf("items %v, available %v", res.Items, res.Available)
+	}
+	checkMetadataOnly(t, res.Items[0].Obj, "a")
+}
+
+func TestMetadataOnlyTypesAreSkippedWithoutMetadataClient(t *testing.T) {
+	res, err := secretsWatcher(nil, nil).ListOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 0 || len(res.Available) != 0 {
+		t.Errorf("a metadata-only type was read with the dynamic client: %v", res.Items)
+	}
+}
+
+func TestStripToMetadata(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"name": "s", "annotations": map[string]any{lastApplied: "{}"}},
+		"data":     map[string]any{"k": "dg=="},
+		"type":     "Opaque",
+	}}
+	got := StripToMetadata(u)
+	if len(got.Object) != 3 || got.GetAnnotations() != nil || got.GetName() != "s" {
+		t.Errorf("got %v", got.Object)
+	}
+	if u.Object["data"] == nil || u.GetAnnotations()[lastApplied] != "{}" {
+		t.Error("the original must not change")
 	}
 }

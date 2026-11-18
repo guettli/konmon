@@ -8,19 +8,24 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// denied resource types are never watched, stored or given to checks, no
-// matter what a check asks for.
-var denied = []schema.GroupResource{
+// metadataOnly resource types are only read as metadata (apiVersion, kind
+// and metadata, without the last-applied-configuration annotation), and only
+// for a check which names them: "*" never includes them.
+var metadataOnly = []schema.GroupResource{
 	{Resource: "secrets"},
 }
 
-// Denied reports whether a resource type must never be read.
+// Denied reports whether a resource type must never be read: subresources.
 func Denied(gr schema.GroupResource) bool {
-	if strings.Contains(gr.Resource, "/") {
-		return true // subresources
-	}
-	for _, d := range denied {
-		if d == gr {
+	return strings.Contains(gr.Resource, "/")
+}
+
+// MetadataOnly reports whether konmon reads only the metadata of a type:
+// Secrets. The API server never sends their data; the last-applied
+// annotation, which holds a copy of it, is dropped on arrival.
+func MetadataOnly(gr schema.GroupResource) bool {
+	for _, m := range metadataOnly {
+		if m == gr {
 			return true
 		}
 	}
@@ -52,7 +57,8 @@ func FormatResource(gr schema.GroupResource) string {
 	return gr.Resource + "." + gr.Group
 }
 
-// resourceSet matches resource types: either all ("*") or a fixed set.
+// resourceSet matches resource types: all ("*") and a fixed set. "*" does
+// not include the MetadataOnly types: a check has to name them.
 type resourceSet struct {
 	all bool
 	set map[schema.GroupResource]struct{}
@@ -77,10 +83,15 @@ func parseResourceSet(patterns []string, allowAll bool) (resourceSet, error) {
 	return rs, nil
 }
 
-func (rs resourceSet) contains(gr schema.GroupResource) bool {
-	if rs.all {
-		return true
-	}
+// named reports whether the set lists the type itself, not only by "*".
+func (rs resourceSet) named(gr schema.GroupResource) bool {
 	_, ok := rs.set[gr]
 	return ok
+}
+
+func (rs resourceSet) contains(gr schema.GroupResource) bool {
+	if _, ok := rs.set[gr]; ok {
+		return true
+	}
+	return rs.all && !MetadataOnly(gr)
 }

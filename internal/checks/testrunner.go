@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
+
+	"github.com/guettli/konmon/internal/watch"
 )
 
 // TestFile is a *.test.yaml file: test cases for one check, run without a
@@ -208,6 +210,9 @@ func testItem(resource, version string, obj map[string]any) (Item, error) {
 		version = "v1"
 	}
 	u := &unstructured.Unstructured{Object: normalize(obj).(map[string]any)}
+	if MetadataOnly(gr) {
+		u = watch.StripToMetadata(u) // as konmon gets it from the cluster
+	}
 	if u.GetUID() == "" {
 		u.SetUID(types.UID("uid-" + u.GetNamespace() + "-" + u.GetName()))
 	}

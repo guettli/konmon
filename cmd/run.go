@@ -23,11 +23,13 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/alertmanager"
+	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/podlogs"
 	"github.com/guettli/konmon/internal/store"
@@ -259,12 +261,18 @@ func run(ctx context.Context) error {
 		return engine.Watch(gr) || (runOpts.usageInterval > 0 && gr == pods)
 	}
 	events := make(chan any, 10000)
+	meta, err := metadata.NewForConfig(config)
+	if err != nil {
+		return err
+	}
 	watcher := &watch.Watcher{
-		Dynamic:   dyn,
-		Discovery: disc,
-		Include:   include,
-		Events:    events,
-		Log:       log,
+		Dynamic:      dyn,
+		Metadata:     meta,
+		MetadataOnly: checks.MetadataOnly,
+		Discovery:    disc,
+		Include:      include,
+		Events:       events,
+		Log:          log,
 	}
 
 	var notifier monitor.Notifier

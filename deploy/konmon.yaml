@@ -12,8 +12,9 @@ metadata:
   name: konmon
   namespace: konmon
 ---
-# get/list/watch on everything. konmon never reads Secrets, but RBAC cannot
-# exclude them from "*": list resources explicitly if that is too much
+# get/list/watch on everything. konmon never reads the data of Secrets (only
+# their metadata, for a check which names them), but RBAC cannot exclude
+# them from "*": list resources explicitly if that is too much
 # (konmon skips types it may not list).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

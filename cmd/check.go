@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/metadata"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/checks"
@@ -212,11 +213,18 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	if err != nil {
 		return nil, err
 	}
-	_, dyn, disc, err := o.kube.clients()
+	config, dyn, disc, err := o.kube.clients()
 	if err != nil {
 		return nil, err
 	}
-	w := &watch.Watcher{Dynamic: dyn, Discovery: disc, Include: engine.Watch, Log: log, Namespaces: o.filter.plainNamespaces()}
+	meta, err := metadata.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	w := &watch.Watcher{
+		Dynamic: dyn, Metadata: meta, MetadataOnly: checks.MetadataOnly, Discovery: disc,
+		Include: engine.Watch, Log: log, Namespaces: o.filter.plainNamespaces(),
+	}
 	warnUnserved(engine, disc, log)
 	listed, err := w.ListOnce(ctx)
 	if err != nil {
