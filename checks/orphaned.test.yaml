@@ -366,3 +366,213 @@ cases:
       kind: Pod
       metadata: {name: debug, namespace: app}
     expectError: maxDebugPodAge
+
+  # More cases of korphan's tests, and branches.
+  - name: young Job without owner
+    resource: jobs.batch
+    now: "2026-01-01T12:00:00Z"
+    object:
+      kind: Job
+      metadata: {name: once, namespace: app, creationTimestamp: "2026-01-01T11:30:00Z"}
+    expect: []
+  - name: Pod without creationTimestamp counts as old
+    resource: pods
+    object:
+      kind: Pod
+      metadata: {name: debug, namespace: app}
+    expect:
+      - {message: "Pod without owner, older than 2h"}
+  - name: maxDebugPodAge as a Go duration
+    resource: pods
+    now: "2026-01-01T12:00:00Z"
+    params: {maxDebugPodAge: 1h30m}
+    object:
+      kind: Pod
+      metadata: {name: debug, namespace: app, creationTimestamp: "2026-01-01T10:45:00Z"}
+    expect: []
+  - name: a bad maxDebugPodAge fails for every object, not only Pods
+    resource: configmaps
+    params: {maxDebugPodAge: 2d}
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app}
+    expectError: maxDebugPodAge
+  - name: ignoreNames with a class, as Go's path.Match
+    resource: configmaps
+    params: {ignoreNames: ["tmp-[ab]"]}
+    object:
+      kind: ConfigMap
+      metadata: {name: tmp-a, namespace: app}
+    expect: []
+  - name: ignoreNames does not match across the class
+    resource: configmaps
+    params: {ignoreNames: ["tmp-[ab]", "x.y"]}
+    object:
+      kind: ConfigMap
+      metadata: {name: tmp-c, namespace: app}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: coordination Lease
+    resource: leases.coordination.k8s.io
+    object:
+      kind: Lease
+      metadata: {name: lock, namespace: app}
+    expect: []
+  - name: managed-by cert-manager-webhook
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: ca, namespace: app, labels: {app.kubernetes.io/managed-by: cert-manager-webhook}}
+    expect: []
+  - name: managed-by of a team is only a hint
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {app.kubernetes.io/managed-by: my-team}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: managed-by my-team"}
+  - name: liqo telemetry ConfigMap (key=value)
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: telemetry, namespace: app, labels: {app.kubernetes.io/name: clusterid-telemetry-configmap}}
+    expect: []
+  - name: the generic key with another value is no operator state
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {app.kubernetes.io/name: web}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: a label of an operator which is not installed
+    resource: configmaps
+    available: [virtualnodes.offloading.liqo.io]
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {traefik.io/router: web, io/foo: bar, plain: x}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: Rancher downstream (cluster.cattle.io), globalrole label
+    resource: clusterrolebindings.rbac.authorization.k8s.io
+    available: [clusterauthtokens.cluster.cattle.io]
+    object:
+      kind: ClusterRoleBinding
+      metadata: {name: crb, labels: {authz.management.cattle.io/gr-owner: admin}}
+    expect: []
+  - name: Rancher prtb-owner-<name>=true
+    resource: rolebindings.rbac.authorization.k8s.io
+    available: [clusters.management.cattle.io]
+    object:
+      kind: RoleBinding
+      metadata: {name: rb, namespace: app, labels: {authz.cluster.cattle.io/prtb-owner-p-abc_prtb-xyz: "true"}}
+    expect: []
+  - name: Rancher owner-user under a user id
+    resource: clusterrolebindings.rbac.authorization.k8s.io
+    available: [clusters.management.cattle.io]
+    object:
+      kind: ClusterRoleBinding
+      metadata: {name: crb, labels: {u-abc123: owner-user}}
+    expect: []
+  - name: Rancher UI object stays an orphan, with a hint
+    resource: configmaps
+    available: [clusters.management.cattle.io]
+    object:
+      kind: ConfigMap
+      metadata:
+        name: x
+        namespace: app
+        labels: {cattle.io/creator: norman}
+        annotations: {field.cattle.io/creatorId: user-1}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: rancher UI/API (norman) by user-1"}
+  - name: Fleet label while Fleet is installed
+    resource: configmaps
+    available: [bundles.fleet.cattle.io]
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {fleet.cattle.io/bundle-name: apps}}
+    expect: []
+  - name: Flux detected by its helm controller alone
+    resource: configmaps
+    available: [helmreleases.helm.toolkit.fluxcd.io]
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {helm.toolkit.fluxcd.io/name: web}}
+    expect: []
+  - name: cert-manager annotation without cert-manager
+    resource: secrets
+    object:
+      kind: Secret
+      metadata: {name: web-tls, namespace: app, annotations: {cert-manager.io/certificate-name: web}}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: skipKinds of the core group
+    resource: secrets
+    params: {skipKinds: [Secret]}
+    object:
+      kind: Secret
+      metadata: {name: s, namespace: app}
+    expect: []
+  - name: hints of Argo CD and kapp while they are not installed
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata:
+        name: x
+        namespace: app
+        labels: {argocd.argoproj.io/instance: shop, kapp.k14s.io/app: "1234"}
+        annotations: {argocd.argoproj.io/tracking-id: "shop:/ConfigMap:app/x"}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: argocd app shop, kapp (app id 1234)"}
+  - name: a control character in a hint is quoted
+    resource: configmaps
+    object:
+      kind: ConfigMap
+      metadata: {name: x, namespace: app, labels: {app.kubernetes.io/managed-by: "a\tb"}}
+    expect:
+      - {message: "not managed by a controller or GitOps tool; likely: \"managed-by a\\tb\""}
+  - name: CertificateSigningRequest
+    resource: certificatesigningrequests.certificates.k8s.io
+    object:
+      kind: CertificateSigningRequest
+      metadata: {name: csr-1}
+    expect: []
+  - name: API Priority and Fairness default
+    resource: flowschemas.flowcontrol.apiserver.k8s.io
+    object:
+      kind: FlowSchema
+      metadata: {name: catch-all}
+    expect: []
+  - name: k3s Addon
+    resource: addons.k3s.cattle.io
+    object:
+      kind: Addon
+      metadata: {name: coredns, namespace: app}
+    expect: []
+  - name: kubernetes Endpoints and EndpointSlice
+    resource: endpointslices.discovery.k8s.io
+    object:
+      kind: EndpointSlice
+      metadata: {name: kubernetes, namespace: default, labels: {kubernetes.io/service-name: kubernetes}}
+    expect: []
+  - name: a hand-made CRD is an orphan
+    resource: customresourcedefinitions.apiextensions.k8s.io
+    object:
+      kind: CustomResourceDefinition
+      metadata: {name: widgets.example.com}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: a PV made by hand is an orphan
+    resource: persistentvolumes
+    object:
+      kind: PersistentVolume
+      metadata: {name: pv-1}
+    expect:
+      - {message: not managed by a controller or GitOps tool}
+  - name: a Service named kubernetes elsewhere is an orphan
+    resource: services
+    object:
+      kind: Service
+      metadata: {name: kubernetes, namespace: app}
+    expect:
+      - {message: not managed by a controller or GitOps tool}

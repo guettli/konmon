@@ -11,12 +11,14 @@
 // ownerReference (a label in the domain of an installed operator's API
 // group, cert-manager Secrets, GitOps credentials, kinds on the skip list).
 // A Pod or Job without owner is only reported once it is older than
-// maxDebugPodSeconds: `kubectl run` for debugging is fine for a while.
+// maxDebugPodAge: `kubectl run` for debugging is fine for a while.
 //
-// A tool or operator counts as installed if konmon may read one of its
-// types: with RBAC that hides cert-manager's types, its TLS Secrets are
-// reported. Secrets are metadata only, so a Secret applied with kubectl
-// apply gets no "kubectl apply" hint.
+// Unlike korphan: a tool or operator counts as installed if konmon watches
+// one of its types (ctx.resources()), not if discovery lists its group. So
+// with RBAC that hides cert-manager's types, or --exclude-resource of all of
+// them, its TLS Secrets are reported. konmon strips managedFields, so there
+// are no "manager X" hints, and Secrets are metadata only, so a Secret
+// applied with kubectl apply gets no "kubectl apply" hint.
 //
 // The annotation korphan.guettli.github.io/ignore with a reason exempts a
 // resource; without a reason it does not.
@@ -134,7 +136,7 @@ const liqo: Record<string, string[]> = {
     "VkOptionsTemplate",
   ],
 };
-const defaultSkipKinds = Object.entries(liqo).flatMap(([group, kinds]) => kinds.map((k) => `${group}/${k}`));
+const defaultSkipKinds = new Set(Object.entries(liqo).flatMap(([group, kinds]) => kinds.map((k) => `${group}/${k}`)));
 
 // Runtime state of an operator in a core kind (a ConfigMap), matched by a
 // distinctive label: the key alone, or key=value when the key is generic.
@@ -169,18 +171,60 @@ function groupOf(resource: string): string {
   return dot < 0 ? "" : resource.slice(dot + 1);
 }
 
-function glob(pattern: string): RegExp {
-  const re = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".");
-  return new RegExp(`^${re}$`);
+const globs = new Map<string, RegExp | null>();
+
+// A RegExp for a pattern of Go's path.Match: * and ? (not across "/"),
+// [classes] with ^ for negation, and \ to escape. null if malformed.
+function glob(pattern: string): RegExp | null {
+  let re = globs.get(pattern);
+  if (re !== undefined) return re;
+  let out = "";
+  let ok = true;
+  for (let i = 0; i < pattern.length && ok; i++) {
+    const c = pattern[i];
+    if (c === "*") out += "[^/]*";
+    else if (c === "?") out += "[^/]";
+    else if (c === "\\") {
+      if (++i >= pattern.length) ok = false;
+      else out += pattern[i].replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+    } else if (c === "[") {
+      // Go and JavaScript share the syntax of a class: ranges, ^ and escapes.
+      const end = pattern.indexOf("]", i + 1);
+      if (end < 0) ok = false;
+      else {
+        out += pattern.slice(i, end + 1);
+        i = end;
+      }
+    } else out += c.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+  }
+  re = null;
+  if (ok) {
+    try {
+      re = new RegExp(`^${out}$`);
+    } catch {
+      re = null;
+    }
+  }
+  globs.set(pattern, re);
+  return re;
 }
 
+const units: Record<string, number> = { ns: 1e-9, us: 1e-6, µs: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+
+const durations = new Map<string, number | null>();
+
+// Seconds of a Go duration ("2h", "1h30m", "1.5h", "0"); null if malformed.
 function parseDuration(s: string): number | null {
-  const m = /^(\d+)(s|m|h|d)$/.exec(s);
-  if (!m) return null;
-  return Number(m[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[m[2] as "s" | "m" | "h" | "d"];
+  let total = durations.get(s);
+  if (total !== undefined) return total;
+  total = null;
+  if (s === "0") total = 0;
+  else if (/^(\d+(\.\d*)?(ns|us|µs|ms|s|m|h))+$/.test(s)) {
+    total = 0;
+    for (const m of s.matchAll(/(\d+(?:\.\d*)?)(ns|us|µs|ms|s|m|h)/g)) total += Number(m[1]) * units[m[2]];
+  }
+  durations.set(s, total);
+  return total;
 }
 
 // A Kubernetes-wide convention, not a sign of an operator: these keys are on
@@ -202,13 +246,13 @@ function conventionDomain(d: string): boolean {
 // for networking.liqo.io). Annotations do not count: operators read
 // annotations of objects they do not own (cert-manager.io/cluster-issuer on
 // an Ingress).
-function operatorLabel(labels: Labels, operatorGroups: string[]): string | null {
+function operatorLabel(labels: Labels, cl: Cluster): string | null {
   for (const key of Object.keys(labels)) {
     const slash = key.indexOf("/");
     if (slash < 0) continue;
     const d = key.slice(0, slash);
     if (!d.includes(".") || conventionDomain(d)) continue;
-    if (operatorGroups.some((g) => d === g || g.endsWith("." + d) || d.endsWith("." + g))) return d;
+    if (cl.operatorDomain(d)) return d;
   }
   return null;
 }
@@ -256,6 +300,10 @@ function kubeInternal(obj: KubeObject, group: string): boolean {
   const annotations: Labels = obj.metadata.annotations ?? {};
   const kind = obj.kind ?? "";
   if (systemNamespaces.has(namespace)) return true;
+  // k3s bootstrap: the roots the deploy controller applies from disk.
+  if (group === "flowcontrol.apiserver.k8s.io" || group === "k3s.cattle.io" || group === "helm.cattle.io") {
+    return true;
+  }
   switch (kind) {
     case "Node":
     case "APIService":
@@ -297,17 +345,15 @@ function kubeInternal(obj: KubeObject, group: string): boolean {
     case "Lease":
       return group === "coordination.k8s.io";
   }
-  // k3s bootstrap: the roots the deploy controller applies from disk.
-  return group === "flowcontrol.apiserver.k8s.io" || group === "k3s.cattle.io" || group === "helm.cattle.io";
+  return false;
 }
 
 // A Secret a Flux source uses to pull (secretRef), or a Kustomization to
 // decrypt (decryption.secretRef): it cannot be in git.
-function fluxCredential(secret: KubeObject, ctx: Context<Params>, resources: string[]): boolean {
+function fluxCredential(secret: KubeObject, ctx: Context<Params>, fluxTypes: string[]): boolean {
   const { name, namespace } = secret.metadata;
-  for (const r of resources) {
+  for (const r of fluxTypes) {
     const g = groupOf(r);
-    if (g !== "source.toolkit.fluxcd.io" && g !== "kustomize.toolkit.fluxcd.io") continue;
     for (const o of ctx.list(r, { namespace })) {
       const ref = g === "source.toolkit.fluxcd.io" ? o.spec?.secretRef?.name : o.spec?.decryption?.secretRef?.name;
       if (ref === name) return true;
@@ -317,30 +363,21 @@ function fluxCredential(secret: KubeObject, ctx: Context<Params>, resources: str
 }
 
 // Reconciled by an operator which sets no ownerReference.
-function operatorOwned(
-  obj: KubeObject,
-  group: string,
-  ctx: Context<Params>,
-  resources: string[],
-  operatorGroups: string[],
-): boolean {
+function operatorOwned(obj: KubeObject, group: string, ctx: Context<Params>, cl: Cluster): boolean {
   const labels: Labels = obj.metadata.labels ?? {};
   const kind = obj.kind ?? "";
-  if ([...defaultSkipKinds, ...ctx.params.skipKinds].includes(group ? `${group}/${kind}` : kind)) return true;
+  const gk = group ? `${group}/${kind}` : kind;
+  if (defaultSkipKinds.has(gk) || ctx.params.skipKinds.includes(gk)) return true;
   if (kind === "Secret" && group === "") {
     if ("argocd.argoproj.io/secret-type" in labels) return true;
-    if (fluxCredential(obj, ctx, resources)) return true;
+    if (fluxCredential(obj, ctx, cl.fluxTypes)) return true;
   }
   if ((labels["app.kubernetes.io/managed-by"] ?? "").startsWith("cert-manager")) return true;
   if (operatorStateLabels.some(([k, v]) => k in labels && (v === "" || labels[k] === v))) return true;
-  if (
-    group === "rbac.authorization.k8s.io" &&
-    rancherGroups.some((g) => operatorGroups.includes(g)) &&
-    rancherOwned(labels)
-  ) {
+  if (group === "rbac.authorization.k8s.io" && cl.rancher && rancherOwned(labels)) {
     return true;
   }
-  return operatorLabel(labels, operatorGroups) !== null;
+  return operatorLabel(labels, cl) !== null;
 }
 
 // How the object most likely got into the cluster, so you know where to
@@ -384,6 +421,46 @@ function hints(obj: KubeObject): string[] {
   return out.map((h) => (/[\x00-\x1f\x7f]/.test(h) ? JSON.stringify(h) : h));
 }
 
+// What the check derives from ctx.resources(), which returns the same array
+// for all calls of an evaluation.
+type Cluster = {
+  resources: string[];
+  installed: typeof managers;
+  rancher: boolean;
+  // The types of Flux which reference Secrets.
+  fluxTypes: string[];
+  // Whether a label domain belongs to an installed operator's API group,
+  // or is a parent or child domain of one (liqo.io, networking.liqo.io).
+  operatorDomain(domain: string): boolean;
+};
+
+let last: Cluster | null = null;
+
+function cluster(resources: string[]): Cluster {
+  if (last?.resources !== resources) {
+    const groups = new Set(resources.map(groupOf));
+    const operatorGroups = [...groups].filter((g) => !builtinGroups.has(g));
+    const domains = new Map<string, boolean>();
+    last = {
+      resources,
+      installed: managers.filter((m) => m.installed(groups)),
+      rancher: rancherGroups.some((g) => groups.has(g)),
+      fluxTypes: resources.filter((r) =>
+        ["source.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io"].includes(groupOf(r)),
+      ),
+      operatorDomain(d) {
+        let v = domains.get(d);
+        if (v === undefined) {
+          v = operatorGroups.some((g) => d === g || g.endsWith("." + d) || d.endsWith("." + g));
+          domains.set(d, v);
+        }
+        return v;
+      },
+    };
+  }
+  return last;
+}
+
 type Params = {
   maxDebugPodAge: string;
   managerLabels: string[];
@@ -419,19 +496,19 @@ export default defineCheck<Params>({
     const labels: Labels = meta.labels ?? {};
     const annotations: Labels = meta.annotations ?? {};
     const group = ctx.resource.group;
-    const resources = ctx.resources();
-    const groups = new Set(resources.map(groupOf));
-    const operatorGroups = [...groups].filter((g) => !builtinGroups.has(g));
+    const cl = cluster(ctx.resources());
     const p = ctx.params;
+    const maxAge = parseDuration(p.maxDebugPodAge);
+    if (maxAge === null)
+      throw new Error(`param maxDebugPodAge: want a duration like 2h or 1h30m, got ${p.maxDebugPodAge}`);
 
-    for (const m of managers) {
-      if (!m.installed(groups)) continue;
+    for (const m of cl.installed) {
       if (m.labels.some((k) => k in labels) || m.annotations.some((k) => k in annotations)) return [];
     }
     if (p.managerLabels.some((k) => k in labels) || p.managerAnnotations.some((k) => k in annotations)) return [];
     if (kubeInternal(obj, group)) return [];
-    if (operatorOwned(obj, group, ctx, resources, operatorGroups)) return [];
-    if (p.ignoreNames.some((g) => glob(g).test(meta.name))) return [];
+    if (operatorOwned(obj, group, ctx, cl)) return [];
+    if (p.ignoreNames.some((g) => glob(g)?.test(meta.name))) return [];
 
     const ignore = annotations[ignoreAnnotation];
     if (ignore !== undefined && ignore.trim() !== "") return [];
@@ -439,8 +516,6 @@ export default defineCheck<Params>({
     const kind = obj.kind ?? ctx.resource.resource;
     let message = "not managed by a controller or GitOps tool";
     if ((kind === "Pod" && group === "") || (kind === "Job" && group === "batch")) {
-      const maxAge = parseDuration(p.maxDebugPodAge);
-      if (maxAge === null) throw new Error(`param maxDebugPodAge: want e.g. 2h, got ${p.maxDebugPodAge}`);
       const created = meta.creationTimestamp ? Date.parse(meta.creationTimestamp) : NaN;
       if (!isNaN(created) && ctx.now.getTime() - created < maxAge * 1000) return [];
       message = `${kind} without owner, older than ${p.maxDebugPodAge}`;

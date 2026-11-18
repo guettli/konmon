@@ -99,9 +99,11 @@ declare module "konmon" {
     /** Whether a resource type is available (e.g. an optional CRD). */
     has(resource: string): boolean;
     /**
-     * The available resource types the check may read, sorted, as
+     * The resource types of the cluster the check may read, sorted, as
      * "resource.group" ("pods" for the core group): e.g. to tell which
-     * operators are installed.
+     * operators are installed. Includes types whose objects are not synced
+     * yet (reading them throws). The same frozen array for all calls of an
+     * evaluation, so a check can cache what it derives from it.
      */
     resources(): string[];
     readonly history: {
