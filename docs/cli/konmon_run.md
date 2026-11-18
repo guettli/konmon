@@ -34,7 +34,7 @@ konmon run [flags]
       --enable-check strings               Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
       --eval-interval duration             Time between two evaluations of all objects. (default 30s)
       --exclude-namespace strings          Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
-      --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Secrets are never read. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
+      --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Of Secrets, only the metadata is read, and only for a check which names them. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
       --for duration                       How long a finding must be open before it fires. (default 2m0s)
   -h, --help                               help for run
       --history-window duration            How much condition history checks which use ctx.history can see. (default 24h0m0s)

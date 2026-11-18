@@ -45,7 +45,7 @@ func (c *checkFlags) register(f *pflag.FlagSet) {
 	f.StringArrayVar(&c.ignoreFindings, "ignore-finding-regex", nil, "Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.")
 	f.StringSliceVar(&c.excludeNamespaces, "exclude-namespace", nil, "Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.")
 	f.StringSliceVar(&c.excludeResources, "exclude-resource", []string{"leases.coordination.k8s.io", "endpointslices.discovery.k8s.io", "events.events.k8s.io"},
-		"Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Secrets are never read.")
+		"Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Of Secrets, only the metadata is read, and only for a check which names them.")
 	f.DurationVar(&c.timeout, "check-timeout", time.Second, "Time limit for one call of a check function.")
 }
 

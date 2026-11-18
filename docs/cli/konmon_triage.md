@@ -43,7 +43,7 @@ konmon triage [CHECK...] [flags]
       --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.
       --enable-check strings               Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
       --exclude-namespace strings          Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
-      --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Secrets are never read. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
+      --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Of Secrets, only the metadata is read, and only for a check which names them. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
       --from-db                            Take the open findings from the database of 'konmon run' (--db) instead of listing the cluster.
   -h, --help                               help for triage
       --history-window duration            How much condition history checks can see. (default 24h0m0s)

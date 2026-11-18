@@ -501,7 +501,30 @@ func TestWatchAndStore(t *testing.T) {
 		t.Error("read-only types are watched but not stored")
 	}
 	if e.Watch(secretsGVR.GroupResource()) {
-		t.Error("secrets must never be watched")
+		t.Error(`"*" must not include secrets`)
+	}
+}
+
+func TestSecretsOnlyForChecksWhichNameThem(t *testing.T) {
+	secrets := secretsGVR.GroupResource()
+	for _, tc := range []struct {
+		name, def     string
+		watch, stored bool
+	}{
+		{"match *", `match: { resources: ["*"] }`, false, false},
+		{"match secrets", `match: { resources: ["*", "secrets"] }`, true, true},
+		{"reads secrets", `match: { resources: ["pods"] }, reads: ["secrets"]`, true, false},
+	} {
+		e, err := Load(nil, []Source{{Path: "x.ts", Code: `export default { name: "x", ` + tc.def + `, check() { return []; } };`}}, Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := e.Watch(secrets); got != tc.watch {
+			t.Errorf("%s: Watch = %v", tc.name, got)
+		}
+		if got := e.Store(secrets); got != tc.stored {
+			t.Errorf("%s: Store = %v", tc.name, got)
+		}
 	}
 }
 
@@ -613,8 +636,8 @@ func TestParseResourceIgnoresCase(t *testing.T) {
 	if want := (schema.GroupResource{Group: "apps", Resource: "deployments"}); gr != want {
 		t.Errorf("got %v, want %v", gr, want)
 	}
-	if gr, _ := ParseResource("Secrets"); !Denied(gr) {
-		t.Error("Secrets must be denied")
+	if gr, _ := ParseResource("Secrets"); !MetadataOnly(gr) {
+		t.Error("Secrets must be metadata only")
 	}
 }
 
@@ -731,5 +754,19 @@ export default defineCheck({
 	// caught case is a real check-error.
 	if len(res.Findings) != 3 || !got["pending no services"] || !got["pending no configmaps"] {
 		t.Errorf("findings: %v", got)
+	}
+}
+
+func TestTestItemStripsSecretsToMetadata(t *testing.T) {
+	it, err := testItem("secrets", "", map[string]any{
+		"apiVersion": "v1", "kind": "Secret",
+		"metadata": map[string]any{"namespace": "ns", "name": "s"},
+		"data":     map[string]any{"key": "dmFsdWU="},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := it.Obj.Object["data"]; ok || it.Obj.GetName() != "s" || it.Obj.GetUID() == "" {
+		t.Errorf("got %v", it.Obj.Object)
 	}
 }

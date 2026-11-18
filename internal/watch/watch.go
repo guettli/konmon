@@ -21,6 +21,7 @@ import (
 	watchapi "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/pager"
 )
@@ -56,6 +57,13 @@ type Watcher struct {
 	Discovery discovery.DiscoveryInterface
 	// Include decides which resource types get watched.
 	Include func(schema.GroupResource) bool
+	// MetadataOnly types (Secrets) are listed and watched with Metadata, the
+	// metadata API: their objects hold only apiVersion, kind and metadata,
+	// without the last-applied-configuration annotation (see
+	// StripToMetadata). Without Metadata, these types are not watched: they
+	// never fall back to Dynamic.
+	MetadataOnly func(schema.GroupResource) bool
+	Metadata     metadata.Interface
 	// Events receives Upsert, Delete and Synced values.
 	Events chan<- any
 	Log    *slog.Logger
@@ -73,6 +81,9 @@ type Watcher struct {
 	// skipped: types which may not be watched (probe failed), with the
 	// error of the last probe.
 	skipped map[schema.GroupResource]error
+	// kinds: the kind of every discovered type, for the objects of the
+	// metadata API, which do not carry it.
+	kinds map[schema.GroupVersionResource]string
 	// discovered: a refresh went through all resource types. Before that,
 	// informers holds only the types started so far.
 	discovered bool
@@ -517,17 +528,80 @@ func (w *Watcher) ListOnce(ctx context.Context) (*ListResult, error) {
 // list lists the objects of a type in one namespace, or in all.
 func (w *Watcher) list(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]Item, error) {
 	var items []Item
+	metadataOnly := w.metadataOnly(gvr.GroupResource())
+	kind := w.kind(gvr)
 	p := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+		if metadataOnly {
+			return w.Metadata.Resource(gvr).Namespace(namespace).List(ctx, opts)
+		}
 		return w.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, opts)
 	})
 	err := p.EachListItem(ctx, metav1.ListOptions{}, func(obj runtime.Object) error {
-		if u, ok := obj.(*unstructured.Unstructured); ok {
+		if m, ok := obj.(*metav1.PartialObjectMetadata); ok {
+			u, err := metadataObject(gvr, kind, m)
+			if err != nil {
+				return err
+			}
+			items = append(items, Item{GVR: gvr, Obj: u})
+			return nil
+		}
+		if u, ok := obj.(*unstructured.Unstructured); ok && !metadataOnly {
 			u.SetManagedFields(nil)
 			items = append(items, Item{GVR: gvr, Obj: u})
 		}
 		return nil
 	})
 	return items, err
+}
+
+func (w *Watcher) metadataOnly(gr schema.GroupResource) bool {
+	return w.MetadataOnly != nil && w.MetadataOnly(gr)
+}
+
+func (w *Watcher) kind(gvr schema.GroupVersionResource) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.kinds[gvr]
+}
+
+// lastApplied is written by kubectl apply: a full copy of the object as it
+// was applied, data of a Secret included.
+const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// StripToMetadata returns a copy of obj with only apiVersion, kind and
+// metadata, without managedFields and the last-applied-configuration
+// annotation: what konmon knows of a MetadataOnly type.
+func StripToMetadata(obj *unstructured.Unstructured) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{}}
+	for _, k := range []string{"apiVersion", "kind", "metadata"} {
+		if v, ok := obj.Object[k]; ok {
+			u.Object[k] = runtime.DeepCopyJSONValue(v)
+		}
+	}
+	u.SetManagedFields(nil)
+	if a := u.GetAnnotations(); a != nil {
+		if _, ok := a[lastApplied]; ok {
+			delete(a, lastApplied)
+			if len(a) == 0 {
+				a = nil
+			}
+			u.SetAnnotations(a)
+		}
+	}
+	return u
+}
+
+// metadataObject converts an object of the metadata API to the form of all
+// other objects, with the apiVersion and kind of its type.
+func metadataObject(gvr schema.GroupVersionResource, kind string, m *metav1.PartialObjectMetadata) (*unstructured.Unstructured, error) {
+	meta, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&m.ObjectMeta)
+	if err != nil {
+		return nil, fmt.Errorf("convert metadata of %s: %w", gvr.String(), err)
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"metadata": meta}}
+	u.SetAPIVersion(gvr.GroupVersion().String())
+	u.SetKind(kind)
+	return StripToMetadata(u), nil
 }
 
 func (w *Watcher) refresh(ctx context.Context) error {
@@ -632,6 +706,7 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, namespaced map
 		partialErr = fmt.Errorf("discovery: %w", err)
 	}
 	namespaced = map[schema.GroupVersionResource]bool{}
+	kinds := map[schema.GroupVersionResource]string{}
 	for _, list := range lists {
 		gv, err := schema.ParseGroupVersion(list.GroupVersion)
 		if err != nil {
@@ -646,10 +721,17 @@ func (w *Watcher) discover() (gvrs []schema.GroupVersionResource, namespaced map
 			if w.Include != nil && !w.Include(gvr.GroupResource()) {
 				continue
 			}
+			if w.metadataOnly(gvr.GroupResource()) && w.Metadata == nil {
+				continue // never read in full
+			}
 			gvrs = append(gvrs, gvr)
 			namespaced[gvr] = r.Namespaced
+			kinds[gvr] = r.Kind
 		}
 	}
+	w.mu.Lock()
+	w.kinds = kinds
+	w.mu.Unlock()
 	return gvrs, namespaced, partialErr, nil
 }
 
@@ -674,7 +756,12 @@ func hasVerbs(verbs metav1.Verbs, want ...string) bool {
 func (w *Watcher) probe(ctx context.Context, gvr schema.GroupVersionResource) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err := w.Dynamic.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	var err error
+	if w.metadataOnly(gvr.GroupResource()) {
+		_, err = w.Metadata.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	} else {
+		_, err = w.Dynamic.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	}
 	if err != nil && (apierrors.IsForbidden(err) || apierrors.IsNotFound(err) || apierrors.IsMethodNotSupported(err)) {
 		return err
 	}
@@ -688,9 +775,24 @@ func (w *Watcher) probe(ctx context.Context, gvr schema.GroupVersionResource) er
 func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 	ctx, cancel := context.WithCancel(ctx)
 	c := &calls{}
-	// The list watcher of dynamicinformer.NewFilteredDynamicInformer, plus
-	// record.
-	client := w.Dynamic.Resource(gvr)
+	// The list watcher of dynamicinformer.NewFilteredDynamicInformer (or of
+	// metadatainformer for a MetadataOnly type), plus record.
+	var (
+		client        listWatcher    = dynamicClient{w.Dynamic.Resource(gvr)}
+		watchListFrom any            = w.Dynamic
+		objType       runtime.Object = &unstructured.Unstructured{}
+		transform                    = stripManagedFields
+	)
+	if w.metadataOnly(gvr.GroupResource()) {
+		client, watchListFrom, objType = metadataClient{w.Metadata.Resource(gvr)}, w.Metadata, &metav1.PartialObjectMetadata{}
+		kind := w.kind(gvr)
+		transform = func(obj any) (any, error) {
+			if m, ok := obj.(*metav1.PartialObjectMetadata); ok {
+				return metadataObject(gvr, kind, m)
+			}
+			return obj, nil // a tombstone, its object is converted already
+		}
+	}
 	lw := &cache.ListWatch{
 		ListWithContextFunc: func(lctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
 			obj, err := client.List(lctx, opts)
@@ -708,9 +810,9 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 			return wi, err
 		},
 	}
-	informer := cache.NewSharedIndexInformerWithOptions(cache.ToListWatcherWithWatchListSemantics(lw, w.Dynamic),
-		&unstructured.Unstructured{}, cache.SharedIndexInformerOptions{ObjectDescription: gvr.String()})
-	if err := informer.SetTransform(stripManagedFields); err != nil {
+	informer := cache.NewSharedIndexInformerWithOptions(cache.ToListWatcherWithWatchListSemantics(lw, watchListFrom),
+		objType, cache.SharedIndexInformerOptions{ObjectDescription: gvr.String()})
+	if err := informer.SetTransform(transform); err != nil {
 		w.Log.Error("set transform", "resource", gvr.String(), "err", err)
 	}
 	send := func(v any) {
@@ -767,6 +869,33 @@ func (w *Watcher) start(ctx context.Context, gvr schema.GroupVersionResource) {
 		close(r.synced)
 		send(Synced{GVR: gvr, UIDs: uids})
 	}()
+}
+
+// listWatcher is what start needs of a dynamic or metadata client.
+type listWatcher interface {
+	List(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error)
+	Watch(ctx context.Context, opts metav1.ListOptions) (watchapi.Interface, error)
+}
+
+// dynamicClient and metadataClient adapt the typed List of the clients.
+type dynamicClient struct{ c dynamic.ResourceInterface }
+
+func (d dynamicClient) List(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+	return d.c.List(ctx, opts)
+}
+
+func (d dynamicClient) Watch(ctx context.Context, opts metav1.ListOptions) (watchapi.Interface, error) {
+	return d.c.Watch(ctx, opts)
+}
+
+type metadataClient struct{ c metadata.ResourceInterface }
+
+func (m metadataClient) List(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+	return m.c.List(ctx, opts)
+}
+
+func (m metadataClient) Watch(ctx context.Context, opts metav1.ListOptions) (watchapi.Interface, error) {
+	return m.c.Watch(ctx, opts)
 }
 
 // stripManagedFields drops metadata.managedFields: it is large and not
