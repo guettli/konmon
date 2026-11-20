@@ -52,9 +52,12 @@ Binaries for Linux, macOS and Windows are attached to every [release](https://gi
 
 ```console
 # What is wrong in the cluster right now? Health first, hygiene below.
-# Exit code 1: health findings; 2: some resource types could not be listed;
-# 3: konmon could not check.
+# Exit code 1: health findings (or hygiene findings of a named check);
+# 2: some resource types could not be listed; 3: konmon could not check.
 konmon check --context prod
+
+# A check named as an argument fails on its hygiene findings too: a CI gate.
+konmon check orphaned -n my-app
 
 # Wait until a condition is gone, or until all is healthy.
 konmon check --while StillProvisioning && music

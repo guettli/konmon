@@ -122,7 +122,8 @@ type exitError int
 func (e exitError) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 const (
-	// errFindings: there are health findings.
+	// errFindings: there are health findings, or hygiene findings of a
+	// check named as an argument.
 	errFindings = exitError(1)
 	// errIncomplete: no findings, but not everything could be checked.
 	errIncomplete = exitError(2)
@@ -144,10 +145,13 @@ and only the resource types they need are listed. A check which is off by
 default runs if an argument is its name ('konmon checks list --all' shows
 them); a glob pattern does not turn it on.
 
-Exit codes: 0 no health findings; 1 health findings; 2 no health findings,
-but some resource types or API groups could not be listed (other than
-forbidden ones, which are printed); 3 konmon could not check (invalid
-flags, cluster not reachable, --timeout).
+Exit codes: 0 no such findings as for 1; 1 health findings, or hygiene
+findings of a check named as an argument; 2 no such findings, but some
+resource types or API groups could not be listed (other than forbidden
+ones, which are printed); 3 konmon could not check (invalid flags, cluster
+not reachable, --timeout). A glob pattern does not name a check: 'konmon
+check orphaned' exits 1 on orphans (a CI gate), 'konmon check' and
+'konmon check "*"' do not.
 
 --repeat runs the check again and again, --while until no health finding
 matches a regular expression: 'konmon check --while StillProvisioning;
@@ -161,6 +165,7 @@ Examples:
   konmon check --context prod
   konmon check -n my-app --category health
   konmon check conditions 'pod-*'
+  konmon check orphaned -n my-app   # exit code 1 if there are orphans
   konmon check -o json | jq '.findings[] | select(.severity == "critical")'
   konmon check --while . --timeout 10m   # wait until healthy
   konmon check --repeat --ignore-younger-than 5m`,
@@ -552,7 +557,6 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 	l := describeListing(listed)
 	took := time.Since(start)
 
-	health := 0
 	out := cmd.OutOrStdout()
 	if checkOpts.filter.output == "json" {
 		result := checkResult{
@@ -563,17 +567,13 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		}
 		for _, s := range shown {
 			result.Findings = append(result.Findings, toJSONFinding(s.finding))
-			if s.finding.Category == checks.CategoryHealth {
-				health++
-			}
 		}
 		sortJSONFindings(result.Findings)
 		if err := writeJSON(out, result); err != nil {
 			return false, err
 		}
 	} else {
-		var hygiene int
-		health, hygiene = printFindingLines(out, shown)
+		health, hygiene := printFindingLines(out, shown)
 		notes.print(out, l.notes(run.uncovered))
 		for _, s := range l.notChecked {
 			_, _ = fmt.Fprintf(out, "Not checked: %s\n", s)
@@ -594,7 +594,7 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "A finding is wrong? 'konmon triage' fixes it in your config; 'konmon report false-positive' tells the maintainers.")
 		}
 	}
-	if health > 0 {
+	if slices.ContainsFunc(shown, func(s shownFinding) bool { return failing(s.finding, only) }) {
 		return matched, errFindings
 	}
 	if len(listed.Failed) > 0 {
@@ -602,6 +602,15 @@ func checkOnce(ctx context.Context, cmd *cobra.Command, only []string, while *re
 		return matched, errIncomplete
 	}
 	return matched, nil
+}
+
+// failing reports whether a finding makes 'konmon check' exit 1: a health
+// finding, or a hygiene finding of a check named as an argument. Like
+// turning on a check which is off by default, a glob pattern does not
+// count: 'konmon check orphaned' fails on orphans, 'konmon check "*"' only
+// on health findings.
+func failing(f *checks.Finding, only []string) bool {
+	return f.Category == checks.CategoryHealth || slices.Contains(only, f.Check)
 }
 
 // whileLines are the texts --while is matched against: the line, and for

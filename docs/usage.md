@@ -9,9 +9,10 @@ konmon run --db konmon.db --cluster-name prod --alertmanager-url http://alertman
 
 # Ad hoc, like check-conditions: list everything once and print findings,
 # health first, hygiene (never alerts) below.
-# Exit code 1: health findings; 2: some types could not be listed;
-# 3: konmon could not check.
+# Exit code 1: health findings (or hygiene findings of a named check);
+# 2: some types could not be listed; 3: konmon could not check.
 konmon check --context prod
+konmon check orphaned -n my-app                 # a named check fails (exit 1) on its hygiene findings too
 konmon check -n 'my-app-*' --category health   # one app, only what is broken
 konmon check conditions 'pod-*'                 # only some checks (and the types they need)
 konmon check -o json | jq '.findings[] | select(.severity == "critical")'
