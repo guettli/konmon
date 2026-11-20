@@ -219,3 +219,26 @@ func TestNotNegative(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestFailing(t *testing.T) {
+	health := &checks.Finding{Check: "conditions", Category: checks.CategoryHealth}
+	orphan := &checks.Finding{Check: "orphaned", Category: checks.CategoryHygiene}
+	for _, tc := range []struct {
+		name string
+		f    *checks.Finding
+		only []string
+		want bool
+	}{
+		{"health, all checks", health, nil, true},
+		{"health, by glob", health, []string{"cond*"}, true},
+		{"hygiene, all checks", orphan, nil, false},
+		{"hygiene, named", orphan, []string{"conditions", "orphaned"}, true},
+		{"hygiene, by glob", orphan, []string{"orph*"}, false},
+		{"hygiene, all by glob", orphan, []string{"*"}, false},
+		{"hygiene, another check named", orphan, []string{"conditions"}, false},
+	} {
+		if got := failing(tc.f, tc.only); got != tc.want {
+			t.Errorf("%s: failing = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

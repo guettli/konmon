@@ -13,10 +13,13 @@ and only the resource types they need are listed. A check which is off by
 default runs if an argument is its name ('konmon checks list --all' shows
 them); a glob pattern does not turn it on.
 
-Exit codes: 0 no health findings; 1 health findings; 2 no health findings,
-but some resource types or API groups could not be listed (other than
-forbidden ones, which are printed); 3 konmon could not check (invalid
-flags, cluster not reachable, --timeout).
+Exit codes: 0 no such findings as for 1; 1 health findings, or hygiene
+findings of a check named as an argument; 2 no such findings, but some
+resource types or API groups could not be listed (other than forbidden
+ones, which are printed); 3 konmon could not check (invalid flags, cluster
+not reachable, --timeout). A glob pattern does not name a check: 'konmon
+check orphaned' exits 1 on orphans (a CI gate), 'konmon check' and
+'konmon check "*"' do not.
 
 --repeat runs the check again and again, --while until no health finding
 matches a regular expression: 'konmon check --while StillProvisioning;
@@ -30,6 +33,7 @@ Examples:
   konmon check --context prod
   konmon check -n my-app --category health
   konmon check conditions 'pod-*'
+  konmon check orphaned -n my-app   # exit code 1 if there are orphans
   konmon check -o json | jq '.findings[] | select(.severity == "critical")'
   konmon check --while . --timeout 10m   # wait until healthy
   konmon check --repeat --ignore-younger-than 5m
