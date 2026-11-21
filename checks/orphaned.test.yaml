@@ -186,15 +186,15 @@ cases:
       metadata: {name: reflected, namespace: app, labels: {offloading.liqo.io/origin: hcloud}}
     expect: []
   - name: liqo parent domain matches a child group
-    resource: secrets
-    available: [configurations.networking.liqo.io]
+    resource: configurations.networking.liqo.io
+    version: v1beta1
     object:
-      kind: Secret
-      metadata: {name: tunnel, namespace: liqo-tenant-x, labels: {liqo.io/remote-cluster-id: x}}
+      kind: Configuration
+      metadata: {name: cluster, namespace: liqo-tenant-x, labels: {liqo.io/remote-cluster-id: x}}
     expect: []
-  # guettli/konmon#68: the agent-sandbox controller labels each
-  # SandboxTemplate it uses; one made by hand is still an orphan.
-  - name: operator label on a custom resource of the operator's own group
+  # #68: the agent-sandbox controller labels each SandboxTemplate it uses;
+  # one made by hand is still an orphan.
+  - name: label of an operator which only read the object
     resource: sandboxtemplates.extensions.agents.x-k8s.io
     version: v1alpha1
     available: [sandboxes.agents.x-k8s.io, sandboxtemplates.extensions.agents.x-k8s.io]
@@ -203,21 +203,25 @@ cases:
       metadata: {name: loop-1, namespace: agents, labels: {agents.x-k8s.io/sandbox-template-ref-hash: abc}}
     expect:
       - message: not managed by a controller or GitOps tool
-  - name: operator label on a custom resource of the same group
-    resource: sandboxes.agents.x-k8s.io
+  - name: another label of that operator still counts
+    resource: sandboxtemplates.extensions.agents.x-k8s.io
     version: v1alpha1
-    available: [sandboxes.agents.x-k8s.io]
+    available: [sandboxes.agents.x-k8s.io, sandboxtemplates.extensions.agents.x-k8s.io]
     object:
-      kind: Sandbox
-      metadata: {name: s, namespace: agents, labels: {agents.x-k8s.io/x: y}}
-    expect:
-      - message: not managed by a controller or GitOps tool
-  - name: operator label on a custom resource of another operator
-    resource: widgets.example.com
-    available: [sandboxes.agents.x-k8s.io, widgets.example.com]
+      kind: SandboxTemplate
+      metadata:
+        name: made-by-operator
+        namespace: agents
+        labels: {agents.x-k8s.io/sandbox-template-ref-hash: abc, agents.x-k8s.io/created-by: x}
+    expect: []
+  # Operators create custom resources of their own group without an owner
+  # (Velero Backups of a Schedule): an own-domain label counts there too.
+  - name: own-domain label on a custom resource of the operator
+    resource: backups.velero.io
+    available: [backups.velero.io]
     object:
-      kind: Widget
-      metadata: {name: w, namespace: agents, labels: {agents.x-k8s.io/x: y}}
+      kind: Backup
+      metadata: {name: daily-20261121, namespace: velero, labels: {velero.io/schedule-name: daily}}
     expect: []
   - name: Reloader meta-info ConfigMap
     resource: configmaps
