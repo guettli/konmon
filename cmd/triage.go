@@ -40,6 +40,11 @@ them as a real problem. The answers are written to the config file (the last
 --config, created if missing) after each decision, keeping its comments.
 The cluster is never changed: review the file and deploy it like any config.
 
+An ignore rule which hides only part of a group (only one object) leaves the
+rest open, and triage asks about them next: 'konmon triage orphaned' walks the orphans one
+by one, each with its own reason, like 'korphan ignore' (which wrote an
+annotation into the cluster instead).
+
 Findings come from listing the cluster once, like 'konmon check' (same flags),
 or with --from-db from the database of a running 'konmon run' (--db).
 
@@ -52,6 +57,7 @@ Examples:
   konmon triage --context prod --config konmon.yaml
   konmon triage --config shared.yaml --config prod.yaml -n 'team-*'
   konmon triage --from-db --db /data/konmon.db --config konmon.yaml
+  konmon triage orphaned --context prod --config konmon.yaml
   konmon triage --context prod --config konmon.yaml --baseline --category hygiene`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -336,10 +342,14 @@ func (t *triageSession) run() error {
 		if err != nil {
 			return err
 		}
-		if t.covered(g, cfg) {
+		open := t.open(g, cfg)
+		if len(open) == 0 {
 			continue
 		}
-		if err := t.group(i+1, len(groups), g); err != nil {
+		// An earlier answer may have hidden some of its findings.
+		rest := *g
+		rest.findings = open
+		if err := t.group(i+1, len(groups), &rest); err != nil {
 			if errors.Is(err, errQuit) {
 				break
 			}
@@ -354,9 +364,9 @@ func (t *triageSession) run() error {
 	return nil
 }
 
-// covered reports whether the answers so far already handle every finding of
-// the group.
-func (t *triageSession) covered(g *triageGroup, cfg *config.Config) bool {
+// open are the findings of the group which the answers so far do not handle.
+func (t *triageSession) open(g *triageGroup, cfg *config.Config) []*checks.Finding {
+	var open []*checks.Finding
 	for _, f := range g.findings {
 		if cfg.Ignored(f, t.now) != nil || cfg.IsAcknowledged(f, t.now) != nil || t.base.IsAcknowledged(f, t.now) != nil {
 			continue
@@ -364,9 +374,9 @@ func (t *triageSession) covered(g *triageGroup, cfg *config.Config) bool {
 		if g.check == "conditions" && g.condition != "" && healthyByPolarity(cfg, g) {
 			continue
 		}
-		return false
+		open = append(open, f)
 	}
-	return true
+	return open
 }
 
 // healthyByPolarity reports whether the taught polarity makes every
@@ -396,7 +406,34 @@ func healthyByPolarity(cfg *config.Config, g *triageGroup) bool {
 	return true
 }
 
+// group asks about one group. An ignore rule which hides only part of it
+// ("only this object") leaves the rest open: they are asked about
+// again, so a check whose findings are decided one by one (orphaned) can be
+// walked object by object.
 func (t *triageSession) group(n, total int, g *triageGroup) error {
+	for {
+		again, err := t.askGroup(n, total, g)
+		if err != nil || !again {
+			return err
+		}
+		cfg, err := t.editor.Config()
+		if err != nil {
+			return err
+		}
+		open := t.open(g, cfg)
+		if len(open) == 0 {
+			return nil
+		}
+		t.printf("  %s of this group left.\n", plural(len(open), "finding"))
+		rest := *g
+		rest.findings = open
+		g = &rest
+	}
+}
+
+// askGroup asks what to do with the group; again reports an ignore rule,
+// after which the findings it did not hide are asked about.
+func (t *triageSession) askGroup(n, total int, g *triageGroup) (again bool, err error) {
 	namespaces := map[string]bool{}
 	var oldest time.Time
 	for _, f := range g.findings {
@@ -431,7 +468,7 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 	for {
 		answer, err := t.ask(options)
 		if err != nil {
-			return err
+			return false, err
 		}
 		switch answer {
 		case "t":
@@ -441,29 +478,29 @@ func (t *triageSession) group(n, total int, g *triageGroup) error {
 			}
 			done, err := t.teach(g)
 			if err != nil || done {
-				return err
+				return false, err
 			}
 		case "i":
 			done, err := t.ignore(g)
 			if err != nil || done {
-				return err
+				return done, err
 			}
 		case "s":
 			done, err := t.snooze(g)
 			if err != nil || done {
-				return err
+				return false, err
 			}
 		case "k":
 			done, err := t.keep(g)
 			if err != nil || done {
-				return err
+				return false, err
 			}
 		case "?":
 			t.details(g)
 		case "n", "":
-			return nil
+			return false, nil
 		case "q":
-			return errQuit
+			return false, errQuit
 		default:
 			t.printf("  Unknown answer %q.\n", answer)
 		}
@@ -549,6 +586,8 @@ func groupRule(g *triageGroup) config.IgnoreRule {
 func (t *triageSession) ladder(g *triageGroup) []rung {
 	f := g.findings[0]
 	group := groupRule(g)
+	// The answers so far: what they already hide is not counted again.
+	cfg, _ := t.editor.Config()
 	var rungs []rung
 	add := func(label string, r config.IgnoreRule) {
 		r.Comment = "-" // counted before the comment is asked
@@ -562,6 +601,9 @@ func (t *triageSession) ladder(g *triageGroup) []rung {
 		}
 		count := 0
 		for _, other := range t.universe {
+			if cfg != nil && cfg.Ignored(other, t.now) != nil {
+				continue
+			}
 			if r.Match(other, t.now) {
 				count++
 			}

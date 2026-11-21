@@ -71,6 +71,7 @@ $ konmon triage --context prod --config konmon.yaml
 ```
 
 - **t** teaches the polarity (for this resource type or all), **i** ignores with the scope you pick (each with the number of findings it hides), a required comment and an optional expiry. **s** snoozes (an ignore rule with `until`, default 7 days), **k** keeps a real problem (`acknowledged:`, still alerts, not asked again), **?** shows the objects and, with `--from-db`/`--use-db`, the condition history.
+- An ignore rule which hides only part of a group (only one object) leaves the rest open: triage asks about them next. The counts leave out what earlier answers already hide. `konmon triage orphaned --config konmon.yaml` walks the orphans one by one, each with its own reason (like `korphan ignore`, but into the config file, not as an annotation in the cluster; the annotation `korphan.guettli.github.io/ignore` still works).
 - Same flags as `konmon check` (`-n`, `--category`, check names), or `--from-db` to triage the findings of a running konmon.
 - With history (`--from-db`, or `--use-db` for a live run), triage ranks condition findings and says why. It is deliberately cautious, it only hints:
   - **possibly normal for this type**: at least 2 objects, every object of the type has this status (not `Unknown`) since more than a day, and all of them are `Ready=True`;
