@@ -18,7 +18,9 @@
 // with RBAC that hides cert-manager's types, or --exclude-resource of all of
 // them, its TLS Secrets are reported. konmon strips managedFields, so there
 // are no "manager X" hints, and Secrets are metadata only, so a Secret
-// applied with kubectl apply gets no "kubectl apply" hint.
+// applied with kubectl apply gets no "kubectl apply" hint. Labels which an
+// operator adds to objects it only reads (readMarkerLabels) do not make an
+// object managed; korphan v0.0.15 counts them (#68).
 //
 // The annotation korphan.guettli.github.io/ignore with a reason exempts a
 // resource; without a reason it does not.
@@ -145,6 +147,11 @@ const operatorStateLabels: [string, string][] = [
   ["app.kubernetes.io/name", "clusterid-telemetry-configmap"], // liqo telemetry identity
 ];
 
+// Labels an operator adds to objects it only reads, not creates: they do
+// not count as a label in its domain. The agent-sandbox controller labels
+// each SandboxTemplate it uses (#68).
+const readMarkerLabels = new Set(["agents.x-k8s.io/sandbox-template-ref-hash"]);
+
 const rancherGroups = ["management.cattle.io", "cluster.cattle.io"];
 
 // Rancher labels whose value names the owner of an RBAC object.
@@ -245,9 +252,10 @@ function conventionDomain(d: string): boolean {
 // A label in the domain of an installed operator's API group (liqo.io/x
 // for networking.liqo.io). Annotations do not count: operators read
 // annotations of objects they do not own (cert-manager.io/cluster-issuer on
-// an Ingress).
+// an Ingress). Nor do the labels of readMarkerLabels.
 function operatorLabel(labels: Labels, cl: Cluster): string | null {
   for (const key of Object.keys(labels)) {
+    if (readMarkerLabels.has(key)) continue;
     const slash = key.indexOf("/");
     if (slash < 0) continue;
     const d = key.slice(0, slash);
