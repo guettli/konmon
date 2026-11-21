@@ -40,8 +40,8 @@ them as a real problem. The answers are written to the config file (the last
 --config, created if missing) after each decision, keeping its comments.
 The cluster is never changed: review the file and deploy it like any config.
 
-An ignore rule for only one object leaves the rest of its group open, and
-triage asks about them next: 'konmon triage orphaned' walks the orphans one
+An ignore rule which hides only part of a group (only one object) leaves the
+rest open, and triage asks about them next: 'konmon triage orphaned' walks the orphans one
 by one, each with its own reason, like 'korphan ignore' (which wrote an
 annotation into the cluster instead).
 
@@ -342,10 +342,14 @@ func (t *triageSession) run() error {
 		if err != nil {
 			return err
 		}
-		if t.covered(g, cfg) {
+		open := t.open(g, cfg)
+		if len(open) == 0 {
 			continue
 		}
-		if err := t.group(i+1, len(groups), g); err != nil {
+		// An earlier answer may have hidden some of its findings.
+		rest := *g
+		rest.findings = open
+		if err := t.group(i+1, len(groups), &rest); err != nil {
 			if errors.Is(err, errQuit) {
 				break
 			}
@@ -358,12 +362,6 @@ func (t *triageSession) run() error {
 		t.printf("Saved %s to %s. Review it (git diff) and deploy it with --config.\n", plural(t.changes, "change"), t.editor.Path())
 	}
 	return nil
-}
-
-// covered reports whether the answers so far already handle every finding of
-// the group.
-func (t *triageSession) covered(g *triageGroup, cfg *config.Config) bool {
-	return len(t.open(g, cfg)) == 0
 }
 
 // open are the findings of the group which the answers so far do not handle.
@@ -408,8 +406,8 @@ func healthyByPolarity(cfg *config.Config, g *triageGroup) bool {
 	return true
 }
 
-// group asks about one group. An ignore rule which hides only some of its
-// findings ("only this object") leaves the rest open: they are asked about
+// group asks about one group. An ignore rule which hides only part of it
+// ("only this object") leaves the rest open: they are asked about
 // again, so a check whose findings are decided one by one (orphaned) can be
 // walked object by object.
 func (t *triageSession) group(n, total int, g *triageGroup) error {

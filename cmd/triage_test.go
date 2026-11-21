@@ -339,3 +339,38 @@ func TestTriageWalksAGroupObjectByObject(t *testing.T) {
 		t.Errorf("c must stay reported: %+v", r)
 	}
 }
+
+func TestTriageGroupShowsOnlyFindingsStillOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	waiting := func(namespace, name, reason string) *checks.Finding {
+		return &checks.Finding{
+			Check: "pod-container-waiting", Category: checks.CategoryHealth, Severity: "warning",
+			GVR:       schema.GroupVersionResource{Version: "v1", Resource: "pods"},
+			Namespace: namespace, Name: name, UID: name, Key: "c", Message: "container c is waiting: " + reason,
+			Details: map[string]string{"reason": reason},
+		}
+	}
+	// Two groups by reason, the larger first. Ignoring it in namespace app
+	// also hides the second group's finding in app.
+	findings := []*checks.Finding{
+		waiting("app", "p1", "ImagePullBackOff"),
+		waiting("b", "p2", "ImagePullBackOff"),
+		waiting("c", "p3", "ImagePullBackOff"),
+		waiting("app", "p4", "CrashLoopBackOff"),
+		waiting("other", "p5", "CrashLoopBackOff"),
+	}
+	out := runTriage(t, path, "i\n2\nknown\n\nn\nn\n", findings...)
+	i := strings.Index(out, "[2/2]")
+	if i < 0 {
+		t.Fatalf("no second group:\n%s", out)
+	}
+	second := out[i:]
+	for _, want := range []string{"1 finding in 1 namespace", "e.g. other/p5"} {
+		if !strings.Contains(second, want) {
+			t.Errorf("missing %q in the second group:\n%s", want, second)
+		}
+	}
+	if strings.Contains(second, "app/p4") {
+		t.Errorf("the second group shows app/p4, which is already ignored:\n%s", second)
+	}
+}

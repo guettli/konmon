@@ -11,8 +11,8 @@ them as a real problem. The answers are written to the config file (the last
 --config, created if missing) after each decision, keeping its comments.
 The cluster is never changed: review the file and deploy it like any config.
 
-An ignore rule for only one object leaves the rest of its group open, and
-triage asks about them next: 'konmon triage orphaned' walks the orphans one
+An ignore rule which hides only part of a group (only one object) leaves the
+rest open, and triage asks about them next: 'konmon triage orphaned' walks the orphans one
 by one, each with its own reason, like 'korphan ignore' (which wrote an
 annotation into the cluster instead).
 
