@@ -11,6 +11,11 @@ them as a real problem. The answers are written to the config file (the last
 --config, created if missing) after each decision, keeping its comments.
 The cluster is never changed: review the file and deploy it like any config.
 
+An ignore rule for only one object leaves the rest of its group open, and
+triage asks about them next: 'konmon triage orphaned' walks the orphans one
+by one, each with its own reason, like 'korphan ignore' (which wrote an
+annotation into the cluster instead).
+
 Findings come from listing the cluster once, like 'konmon check' (same flags),
 or with --from-db from the database of a running 'konmon run' (--db).
 
@@ -23,6 +28,7 @@ Examples:
   konmon triage --context prod --config konmon.yaml
   konmon triage --config shared.yaml --config prod.yaml -n 'team-*'
   konmon triage --from-db --db /data/konmon.db --config konmon.yaml
+  konmon triage orphaned --context prod --config konmon.yaml
   konmon triage --context prod --config konmon.yaml --baseline --category hygiene
 
 ```

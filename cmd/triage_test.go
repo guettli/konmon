@@ -293,3 +293,49 @@ func TestTriageSaysWhenCountsArePartial(t *testing.T) {
 		t.Errorf("no note about partial counts:\n%s", out.String())
 	}
 }
+
+func TestTriageWalksAGroupObjectByObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "konmon.yaml")
+	orphan := func(name string) *checks.Finding {
+		return &checks.Finding{
+			Check: "orphaned", Category: checks.CategoryHygiene, Severity: "info",
+			GVR:       schema.GroupVersionResource{Version: "v1", Resource: "secrets"},
+			Namespace: "app", Name: name, UID: name, Message: "not managed by a controller or GitOps tool",
+		}
+	}
+	findings := []*checks.Finding{orphan("a"), orphan("b"), orphan("c")}
+	input := strings.Join([]string{
+		"i", "1", "made by the backup job", "", // only app/a
+		"i", "1", "rotated by hand, ticket 9", "30d", // only app/b
+		"n", // leave app/c
+	}, "\n") + "\n"
+	out := runTriage(t, path, input, findings...)
+	for _, want := range []string{
+		"3 findings in 1 group",
+		"1) only app/a",
+		"2 findings of this group left.",
+		"1) only app/b",
+		"2) these findings in namespace app                              hides 2\n",
+		"1 finding of this group left.",
+		"e.g. app/c",
+		"Saved 2 changes",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	cfg, err := config.Load([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	if r := cfg.Ignored(findings[0], now); r == nil || r.Comment != "made by the backup job" || r.Until != "" {
+		t.Errorf("a: %+v", r)
+	}
+	if r := cfg.Ignored(findings[1], now); r == nil || r.Comment != "rotated by hand, ticket 9" || r.Until != "2026-11-26" {
+		t.Errorf("b: %+v", r)
+	}
+	if r := cfg.Ignored(findings[2], now); r != nil {
+		t.Errorf("c must stay reported: %+v", r)
+	}
+}
