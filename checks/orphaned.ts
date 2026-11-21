@@ -9,7 +9,8 @@
 // not count); was created by the control plane, the kubelet or the
 // distribution; or is reconciled by an operator which sets no
 // ownerReference (a label in the domain of an installed operator's API
-// group, cert-manager Secrets, GitOps credentials, kinds on the skip list).
+// group, except on a custom resource of that group; cert-manager Secrets,
+// GitOps credentials, kinds on the skip list).
 // A Pod or Job without owner is only reported once it is older than
 // maxDebugPodAge: `kubectl run` for debugging is fine for a while.
 //
@@ -18,7 +19,9 @@
 // with RBAC that hides cert-manager's types, or --exclude-resource of all of
 // them, its TLS Secrets are reported. konmon strips managedFields, so there
 // are no "manager X" hints, and Secrets are metadata only, so a Secret
-// applied with kubectl apply gets no "kubectl apply" hint.
+// applied with kubectl apply gets no "kubectl apply" hint. An operator's
+// label on a custom resource of its own group does not make it managed
+// (korphan v0.0.15 still trusts it, #68).
 //
 // The annotation korphan.guettli.github.io/ignore with a reason exempts a
 // resource; without a reason it does not.
@@ -245,16 +248,26 @@ function conventionDomain(d: string): boolean {
 // A label in the domain of an installed operator's API group (liqo.io/x
 // for networking.liqo.io). Annotations do not count: operators read
 // annotations of objects they do not own (cert-manager.io/cluster-issuer on
-// an Ingress).
-function operatorLabel(labels: Labels, cl: Cluster): string | null {
+// an Ingress). Neither does a label on a custom resource of the operator's
+// own group: that is its input, and a label it adds there says "I read
+// this", not "I made this" (the agent-sandbox controller labels each
+// SandboxTemplate it uses). The custom resources an operator creates are on
+// the skip list.
+function operatorLabel(labels: Labels, group: string, cl: Cluster): string | null {
   for (const key of Object.keys(labels)) {
     const slash = key.indexOf("/");
     if (slash < 0) continue;
     const d = key.slice(0, slash);
-    if (!d.includes(".") || conventionDomain(d)) continue;
+    if (!d.includes(".") || conventionDomain(d) || sameDomain(d, group)) continue;
     if (cl.operatorDomain(d)) return d;
   }
   return null;
+}
+
+// Whether a label domain and an API group are the same, or one is a parent
+// domain of the other (agents.x-k8s.io, extensions.agents.x-k8s.io).
+function sameDomain(d: string, group: string): boolean {
+  return group !== "" && (d === group || group.endsWith("." + d) || d.endsWith("." + group));
 }
 
 function looksLikeUID(s: string): boolean {
@@ -377,7 +390,7 @@ function operatorOwned(obj: KubeObject, group: string, ctx: Context<Params>, cl:
   if (group === "rbac.authorization.k8s.io" && cl.rancher && rancherOwned(labels)) {
     return true;
   }
-  return operatorLabel(labels, cl) !== null;
+  return operatorLabel(labels, group, cl) !== null;
 }
 
 // How the object most likely got into the cluster, so you know where to
@@ -451,7 +464,7 @@ function cluster(resources: string[]): Cluster {
       operatorDomain(d) {
         let v = domains.get(d);
         if (v === undefined) {
-          v = operatorGroups.some((g) => d === g || g.endsWith("." + d) || d.endsWith("." + g));
+          v = operatorGroups.some((g) => sameDomain(d, g));
           domains.set(d, v);
         }
         return v;
