@@ -24,10 +24,14 @@ import (
 
 // collectUsage samples the metrics API every interval and adds the samples
 // to hourly usage buckets, for `konmon suggest-requests`. Pods pods does not
-// know (excluded, or not synced yet) are skipped. Without the metrics API (no
-// metrics-server) it logs once and keeps trying. It never returns an error:
-// konmon run must not stop over usage data.
-func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, pods usage.PodLookup, interval time.Duration, log *slog.Logger) error {
+// know (excluded, or not synced yet) are skipped. Unless latest is nil, it
+// also keeps the last use of all Pods there, for checks which use
+// container-usage. Without the metrics API (no metrics-server) it logs once
+// and keeps trying. It never returns an error: konmon run must not stop over
+// usage data.
+func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, pods usage.PodLookup, latest *usage.Latest,
+	interval time.Duration, log *slog.Logger,
+) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	failing := false
@@ -37,15 +41,32 @@ func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, p
 			return nil
 		case now := <-t.C:
 			msg := "cannot read container usage from the metrics API; suggest-requests gets no data until this works"
-			samples, err := usage.Fetch(ctx, dyn, "", pods)
+			if latest != nil {
+				msg = "cannot read container usage from the metrics API; suggest-requests gets no data and the memory use of containers is not checked until this works"
+			}
+			list, err := usage.List(ctx, dyn, "")
 			if apierrors.IsNotFound(err) {
 				msg = "metrics API (metrics.k8s.io) not available, install metrics-server; suggest-requests gets no data until then"
+				if latest != nil {
+					msg = "metrics API (metrics.k8s.io) not available, install metrics-server; until then suggest-requests gets no data and the memory use of containers is not checked"
+				}
 			}
+			var samples []usage.Sample
 			if err == nil {
+				if latest != nil {
+					latest.Set(list, now)
+				}
+				samples = usage.Samples(list, pods)
 				msg = "cannot store container usage"
 				err = st.Update(ctx, func(tx *store.Tx) error {
 					return tx.AddUsage(now.UTC().Truncate(time.Hour), samples)
 				})
+			} else if latest != nil && ctx.Err() == nil {
+				if apierrors.IsNotFound(err) {
+					latest.Unavailable()
+				} else {
+					latest.Failed(err)
+				}
 			}
 			switch {
 			case err != nil && ctx.Err() != nil:

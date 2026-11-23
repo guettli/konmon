@@ -60,6 +60,10 @@ type Config struct {
 	// "volume-stats" (see checks.Snapshot.SetVolumeStats); nil (or a nil
 	// map) means not known yet.
 	VolumeStats func(now time.Time) (stats map[checks.VolumeKey]checks.VolumeStats, complete bool)
+	// ContainerUsage returns the use of the containers for checks which use
+	// "container-usage" (see checks.Snapshot.SetContainerUsage); nil (or a
+	// nil map) if it is not known yet.
+	ContainerUsage func(now time.Time) (usage map[checks.PodKey]checks.PodUsage, complete bool)
 	// For is how long a finding must be open before it fires.
 	For time.Duration
 	// EvalInterval is the time between two evaluations.
@@ -379,6 +383,11 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 	if m.cfg.VolumeStats != nil {
 		if v, complete := m.cfg.VolumeStats(now); v != nil {
 			snap.SetVolumeStats(v, complete)
+		}
+	}
+	if m.cfg.ContainerUsage != nil {
+		if u, complete := m.cfg.ContainerUsage(now); u != nil {
+			snap.SetContainerUsage(u, complete)
 		}
 	}
 	res, err := m.cfg.Checks.Evaluate(evalCtx, snap, hist, now)

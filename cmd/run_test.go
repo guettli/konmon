@@ -36,7 +36,7 @@ func TestHealthServer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := healthServer("", fakeEvaluations{last: tt.last}, nil, nil, tt.started, interval)
+			srv := healthServer("", fakeEvaluations{last: tt.last}, nil, nil, nil, tt.started, interval)
 			for path, want := range map[string]int{"/healthz": tt.healthz, "/readyz": tt.readyz} {
 				rec := httptest.NewRecorder()
 				srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
@@ -55,7 +55,7 @@ func TestMetrics(t *testing.T) {
 		skipped: []watch.SkippedType{{GroupResource: schema.GroupResource{Resource: "secrets"}, Reason: "Forbidden"}},
 	}
 	volumes := fakeVolumes{"n2": errors.New("x"), "n1": errors.New("y")}
-	srv := healthServer("", fakeEvaluations{last: last, n: 42}, types, volumes, time.Unix(1_799_999_000, 0), 30*time.Second)
+	srv := healthServer("", fakeEvaluations{last: last, n: 42}, types, volumes, fakeContainers{errors.New("down")}, time.Unix(1_799_999_000, 0), 30*time.Second)
 	rec := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
@@ -70,6 +70,7 @@ func TestMetrics(t *testing.T) {
 		"# TYPE konmon_stale_resource_type_since_timestamp_seconds gauge\nkonmon_stale_resource_type_since_timestamp_seconds{resource=\"widgets.example.com\"} 1799999500\n",
 		"# TYPE konmon_skipped_resource_type gauge\nkonmon_skipped_resource_type{resource=\"secrets\",reason=\"Forbidden\"} 1\n",
 		"# TYPE konmon_volume_stats_failed_node gauge\nkonmon_volume_stats_failed_node{node=\"n1\"} 1\nkonmon_volume_stats_failed_node{node=\"n2\"} 1\n",
+		"# TYPE konmon_container_usage_failed gauge\nkonmon_container_usage_failed 1\n",
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("missing %q in\n%s", want, rec.Body)
@@ -77,17 +78,25 @@ func TestMetrics(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	srv = healthServer("", fakeEvaluations{}, fakeTypes{}, nil, time.Now(), 30*time.Second)
+	srv = healthServer("", fakeEvaluations{}, fakeTypes{}, nil, nil, time.Now(), 30*time.Second)
 	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	if strings.Contains(rec.Body.String(), "konmon_volume_stats_failed_node") {
-		t.Errorf("volume stats are not collected, no metric expected:\n%s", rec.Body)
+	if strings.Contains(rec.Body.String(), "konmon_volume_stats_failed_node") || strings.Contains(rec.Body.String(), "konmon_container_usage_failed") {
+		t.Errorf("volume stats and container usage are not collected, no metric expected:\n%s", rec.Body)
 	}
+
 	if !strings.Contains(rec.Body.String(), "\nkonmon_last_evaluation_timestamp_seconds 0\n") {
 		t.Errorf("before the first evaluation the timestamp should be 0:\n%s", rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "konmon_stale_resource_type_since_timestamp_seconds{") ||
 		!strings.HasSuffix(rec.Body.String(), "# TYPE konmon_skipped_resource_type gauge\n") {
 		t.Errorf("no stale or skipped types: want no series of them:\n%s", rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	srv = healthServer("", fakeEvaluations{}, fakeTypes{}, nil, fakeContainers{}, time.Now(), 30*time.Second)
+	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "\nkonmon_container_usage_failed 0\n") {
+		t.Errorf("container usage works: want 0:\n%s", rec.Body)
 	}
 }
 
@@ -121,6 +130,10 @@ func TestSplitResourceNameIgnoresCase(t *testing.T) {
 		t.Errorf("got %q %q %q %v", resource, group, name, err)
 	}
 }
+
+type fakeContainers struct{ err error }
+
+func (f fakeContainers) Err() error { return f.err }
 
 type fakeVolumes map[string]error
 

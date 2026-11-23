@@ -34,6 +34,7 @@ import (
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/podlogs"
 	"github.com/guettli/konmon/internal/store"
+	"github.com/guettli/konmon/internal/usage"
 	"github.com/guettli/konmon/internal/volumestats"
 	"github.com/guettli/konmon/internal/watch"
 )
@@ -95,7 +96,8 @@ func init() {
 	f.IntVar(&runOpts.alertLogLines, "alert-log-lines", podlogs.DefaultLines, "Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container "+
 		"(of the previous instance if it restarted). Needs get on pods/log. 0 disables it.")
 	f.DurationVar(&runOpts.usageInterval, "usage-interval", time.Minute, "Time between two samples of container CPU and memory use from the metrics API "+
-		"(metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it.")
+		"(metrics-server), kept as hourly buckets for 'konmon suggest-requests', and the latest for checks which use container-usage "+
+		"(container-memory-near-limit). 0 disables it; then disable those checks too.")
 	f.DurationVar(&runOpts.volumeStatsInterval, "volume-stats-interval", time.Minute, "Time between two reads of the volume usage from the kubelets "+
 		"(summary API via the API server, needs get on nodes/proxy), for checks which use volume-stats (pvc-almost-full). "+
 		"0 disables it; then disable those checks too.")
@@ -233,6 +235,13 @@ func run(ctx context.Context) error {
 			}
 		}
 	}
+	if runOpts.usageInterval == 0 {
+		for _, d := range engine.Checks() {
+			if slices.Contains(d.Uses, "container-usage") {
+				return fmt.Errorf("--usage-interval=0, but check %s uses container-usage: disable it with --disable-check %s", d.Name, d.Name)
+			}
+		}
+	}
 	if runOpts.alertLogLines < 0 {
 		return errors.New("--alert-log-lines must not be negative")
 	}
@@ -302,6 +311,11 @@ func run(ctx context.Context) error {
 		volumes = &volumestats.Collector{Client: core.RESTClient(), MaxAge: 3*runOpts.volumeStatsInterval + time.Minute}
 	}
 
+	var containers *usage.Latest
+	if engine.UsesContainerUsage() && runOpts.usageInterval > 0 {
+		containers = &usage.Latest{MaxAge: 3*runOpts.usageInterval + time.Minute}
+	}
+
 	var notifier monitor.Notifier
 	if len(runOpts.alertmanagerURLs) > 0 {
 		labels := map[string]string{}
@@ -340,6 +354,7 @@ func run(ctx context.Context) error {
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,
 		VolumeStats:       volumeStatsFunc(volumes),
+		ContainerUsage:    containerUsageFunc(containers),
 		StoreRevisions: func(gr schema.GroupResource) bool {
 			return runOpts.revisions && !noRevisions(gr)
 		},
@@ -372,7 +387,7 @@ func run(ctx context.Context) error {
 			}
 			return obj
 		}
-		g.Go(func() error { return collectUsage(ctx, st, dyn, lookup, runOpts.usageInterval, log) })
+		g.Go(func() error { return collectUsage(ctx, st, dyn, lookup, containers, runOpts.usageInterval, log) })
 	}
 	if volumes != nil {
 		g.Go(func() error {
@@ -384,7 +399,11 @@ func run(ctx context.Context) error {
 		if volumes != nil {
 			vf = volumes
 		}
-		srv := healthServer(runOpts.listen, mon, watcher, vf, time.Now(), runOpts.evalInterval)
+		var cf containerFailures
+		if containers != nil {
+			cf = containers
+		}
+		srv := healthServer(runOpts.listen, mon, watcher, vf, cf, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("listen %s: %w", runOpts.listen, err)
@@ -418,12 +437,14 @@ const startupGrace = 10 * time.Minute
 //     without a startup probe from killing a slow initial sync.
 //   - /metrics: Prometheus metrics, to alert from outside when konmon does
 //     not evaluate (konmon cannot report that about itself).
-func healthServer(addr string, ev evaluations, types watchedTypes, volumes volumeFailures, started time.Time, evalInterval time.Duration) *http.Server {
+func healthServer(addr string, ev evaluations, types watchedTypes, volumes volumeFailures, containers containerFailures,
+	started time.Time, evalInterval time.Duration,
+) *http.Server {
 	lastEvaluation := ev.LastEvaluation
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, ev, types, volumes, started, evalInterval)
+		writeMetrics(w, ev, types, volumes, containers, started, evalInterval)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		last := lastEvaluation()
@@ -457,9 +478,17 @@ type volumeFailures interface {
 	Failed() map[string]error
 }
 
+// containerFailures is what the health server needs of the latest container
+// usage; nil if no check uses it.
+type containerFailures interface {
+	Err() error
+}
+
 // writeMetrics writes the metrics in the Prometheus text format. A handful
 // of gauges and one counter: no need for a client library.
-func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, volumes volumeFailures, started time.Time, evalInterval time.Duration) {
+func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, volumes volumeFailures, containers containerFailures,
+	started time.Time, evalInterval time.Duration,
+) {
 	var lastSeconds float64
 	if last := ev.LastEvaluation(); !last.IsZero() {
 		lastSeconds = float64(last.UnixMilli()) / 1000
@@ -501,6 +530,16 @@ func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, volumes volum
 	slices.SortFunc(skipped, func(a, b watch.SkippedType) int { return strings.Compare(a.String(), b.String()) })
 	for _, t := range skipped {
 		_, _ = fmt.Fprintf(w, "konmon_skipped_resource_type{resource=\"%s\",reason=\"%s\"} 1\n", labelValue(t.String()), labelValue(t.Reason))
+	}
+	if containers != nil {
+		failed := 0
+		if containers.Err() != nil {
+			failed = 1
+		}
+		_, _ = fmt.Fprintf(w, "# HELP konmon_container_usage_failed 1 if the metrics API (metrics-server) could not be read in the last try: "+
+			"the memory use of containers is not checked. 0 if it worked or was not read yet.\n"+
+			"# TYPE konmon_container_usage_failed gauge\n"+
+			"konmon_container_usage_failed %d\n", failed)
 	}
 	if volumes == nil {
 		return

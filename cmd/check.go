@@ -25,6 +25,7 @@ import (
 	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/store"
+	"github.com/guettli/konmon/internal/usage"
 	"github.com/guettli/konmon/internal/volumestats"
 	"github.com/guettli/konmon/internal/watch"
 )
@@ -281,6 +282,37 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 		updateVolumeStats(ctx, c, core, defaultVolumeStatsNodeSelector, map[string]bool{}, log)
 		if v, complete := c.Stats(now); v != nil {
 			snap.SetVolumeStats(v, complete)
+		}
+	}
+	podsGR := schema.GroupResource{Resource: "pods"}
+	if engine.UsesContainerUsage() && slices.ContainsFunc(snapItems, func(it checks.Item) bool { return it.GVR.GroupResource() == podsGR }) {
+		l := &usage.Latest{MaxAge: time.Hour}
+		// With -n only those namespaces: RBAC may allow no more.
+		namespaces := o.filter.plainNamespaces()
+		if len(namespaces) == 0 {
+			namespaces = []string{""}
+		}
+		var all []checks.PodUsage
+		var err error
+		for _, ns := range namespaces {
+			var list []checks.PodUsage
+			if list, err = usage.List(ctx, dyn, ns); err != nil {
+				break
+			}
+			all = append(all, list...)
+		}
+		switch {
+		case apierrors.IsNotFound(err):
+			log.Warn("metrics API (metrics.k8s.io) not available, install metrics-server; the memory use of containers is not checked")
+			l.Unavailable()
+		case err != nil:
+			log.Warn("cannot read container usage from the metrics API (metrics-server); the memory use of containers is not checked", "err", err)
+			l.Failed(err)
+		default:
+			l.Set(all, now)
+		}
+		if u, complete := l.Usage(now); u != nil {
+			snap.SetContainerUsage(u, complete)
 		}
 	}
 	res, err := engine.Evaluate(ctx, snap, hist, now)
