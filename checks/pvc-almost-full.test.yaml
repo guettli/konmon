@@ -15,7 +15,7 @@ cases:
     volumeStats:
       - {node: n1, pod: db-0, usedBytes: 10200547328, availableBytes: 536870912, capacityBytes: 10737418240}
     expect:
-      - {key: bytes, message: "volume is 95% full (9.5 GiB used of 10.0 GiB, 512.0 MiB free)", details: {node: n1, pod: db-0, usedBytes: "10200547328", availableBytes: "536870912"}}
+      - {key: bytes, message: "volume is 95% full (9.5 GiB used of 10.0 GiB, 512.0 MiB free)", details: {node: n1, pod: db-0, usedBytes: "10200547328", availableBytes: "536870912", capacityBytes: "10737418240"}}
   - name: below the threshold
     resource: persistentvolumeclaims
     available: [pods]
@@ -60,7 +60,16 @@ cases:
     volumeStats:
       - {usedBytes: 10, availableBytes: 90, capacityBytes: 100, inodes: 1000, inodesUsed: 990, inodesFree: 10}
     expect:
-      - {key: inodes, message: "volume has used 99% of its inodes (990 of 1000)"}
+      - {key: inodes, message: "volume has used 99% of its inodes (990 used of 1000, 10 free)"}
+  - name: inodes without a total
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {inodesUsed: 95, inodesFree: 5}
+    expect:
+      - {key: inodes, message: "volume has used 95% of its inodes (95 used, 5 free)", details: {node: "", pod: "", inodesUsed: "95", inodesFree: "5"}}
   - name: threshold as parameter
     resource: persistentvolumeclaims
     available: [pods]
@@ -76,7 +85,30 @@ cases:
     available: [pods]
     object:
       metadata: {name: data, namespace: default}
+    volumeStats: []
     expect: []
+  - name: not collected yet
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    expectError: not collected yet
+  - name: no stats while a kubelet fails
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats: []
+    volumeStatsIncomplete: true
+    expectError: some node could not be asked
+  - name: stale stats
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {node: n1, usedBytes: 99, availableBytes: 1, stale: true}
+    expectError: out of date
   - name: ReadOnlyMany only (a read-only image)
     resource: persistentvolumeclaims
     available: [pods]

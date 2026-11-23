@@ -55,8 +55,11 @@ type TestCase struct {
 		LastTransitionTime string    `json:"lastTransitionTime"`
 	} `json:"history"`
 	// VolumeStats is what ctx.volumeStats returns; namespace and pvc
-	// default to those of the object.
-	VolumeStats []struct {
+	// default to those of the object. Without it, the stats are not
+	// collected yet (ctx.volumeStats throws); use [] for "not mounted".
+	// VolumeStatsIncomplete: some kubelet could not be asked.
+	VolumeStatsIncomplete bool `json:"volumeStatsIncomplete"`
+	VolumeStats           []struct {
 		Namespace      string    `json:"namespace"`
 		PVC            string    `json:"pvc"`
 		Node           string    `json:"node"`
@@ -69,6 +72,7 @@ type TestCase struct {
 		Inodes         *uint64   `json:"inodes"`
 		InodesUsed     *uint64   `json:"inodesUsed"`
 		InodesFree     *uint64   `json:"inodesFree"`
+		Stale          bool      `json:"stale"`
 	} `json:"volumeStats"`
 	// Expect lists the findings; only the given fields are compared.
 	Expect []map[string]any `json:"expect"`
@@ -210,10 +214,12 @@ func (e *Engine) runCase(def *Definition, tc *TestCase) error {
 		volumes[key] = VolumeStats{
 			Node: v.Node, Pod: v.Pod, Volume: v.Volume, Time: t,
 			UsedBytes: v.UsedBytes, CapacityBytes: v.CapacityBytes, AvailableBytes: v.AvailableBytes,
-			Inodes: v.Inodes, InodesUsed: v.InodesUsed, InodesFree: v.InodesFree,
+			Inodes: v.Inodes, InodesUsed: v.InodesUsed, InodesFree: v.InodesFree, Stale: v.Stale,
 		}
 	}
-	snap.SetVolumeStats(volumes)
+	if tc.VolumeStats != nil {
+		snap.SetVolumeStats(volumes, !tc.VolumeStatsIncomplete)
+	}
 	rt.begin(snap, hist, now)
 	if !d.Matches(item.GVR.GroupResource()) {
 		return fmt.Errorf("check %s does not match resource %s", d.Name, tc.Resource)

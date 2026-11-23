@@ -57,8 +57,9 @@ type Config struct {
 	// HistoryWindow is how much condition history checks can see.
 	HistoryWindow time.Duration
 	// VolumeStats returns the usage of volumes for checks which use
-	// "volume-stats"; nil (or a nil result) means not known yet.
-	VolumeStats func() map[checks.VolumeKey]checks.VolumeStats
+	// "volume-stats" (see checks.Snapshot.SetVolumeStats); nil (or a nil
+	// map) means not known yet.
+	VolumeStats func(now time.Time) (stats map[checks.VolumeKey]checks.VolumeStats, complete bool)
 	// For is how long a finding must be open before it fires.
 	For time.Duration
 	// EvalInterval is the time between two evaluations.
@@ -376,8 +377,8 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		snap.SetPending(gr)
 	}
 	if m.cfg.VolumeStats != nil {
-		if v := m.cfg.VolumeStats(); v != nil {
-			snap.SetVolumeStats(v)
+		if v, complete := m.cfg.VolumeStats(now); v != nil {
+			snap.SetVolumeStats(v, complete)
 		}
 	}
 	res, err := m.cfg.Checks.Evaluate(evalCtx, snap, hist, now)

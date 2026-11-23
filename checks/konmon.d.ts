@@ -86,8 +86,9 @@ declare module "konmon" {
   /**
    * The usage of the volume of a PersistentVolumeClaim, as the kubelet of
    * the Node which mounts it reports it (summary API). Fields the kubelet
-   * does not report are undefined. For volumes on a shared filesystem
-   * (local-path, hostPath) the numbers are those of the whole filesystem.
+   * does not report are undefined. For a local PV on a shared filesystem
+   * (local-path) the numbers are those of the whole filesystem; a hostPath
+   * PV has none.
    */
   export interface VolumeStats {
     readonly node: string;
@@ -132,8 +133,9 @@ declare module "konmon" {
     };
     /**
      * The usage of the volume of a PersistentVolumeClaim; null if no Pod
-     * mounts it (or its kubelet could not be asked). Needs
-     * uses: ["volume-stats"].
+     * mounts it. Throws if it is not known (not read yet, a kubelet could
+     * not be asked, out of date): the previous findings of the object stay.
+     * Needs uses: ["volume-stats"].
      */
     volumeStats(pvc: KubeObject): VolumeStats | null;
     /** Debug logging (konmon --log-level debug). */

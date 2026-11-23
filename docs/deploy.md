@@ -4,7 +4,7 @@
 
 To try it: `kubectl apply -k 'github.com/guettli/konmon/deploy?ref=main'`.
 
-- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole; `get` on `pods/log` is for the [`logs` annotation](#alerts) of alerts). konmon never reads the data of Secrets (only their metadata, and only for a check which names them), but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once (`list` on `pods.metrics.k8s.io` is for [`suggest-requests`](usage.md#suggesting-resource-requests));
+- a ServiceAccount with `get`, `list` and `watch` on everything (a ClusterRole; `get` on `pods/log` is for the [`logs` annotation](#alerts) of alerts). konmon never reads the data of Secrets (only their metadata, and only for a check which names them), but RBAC cannot exclude them from `*`; if that is too much, list the resources explicitly: konmon skips types it may not list and logs them once (`list` on `pods.metrics.k8s.io` is for [`suggest-requests`](usage.md#suggesting-resource-requests); `list` on `nodes` and `get` on `nodes/proxy` are for the volume usage of [`pvc-almost-full`](checks.md), read from the kubelet summary API. `nodes/proxy` reaches the whole kubelet API, which is powerful: if you do not want to grant it, disable the check with `--disable-check pvc-almost-full --volume-stats-interval=0`);
 - a PersistentVolumeClaim for the database (`/data`, 2Gi) of the default StorageClass: without a default StorageClass, set `storageClassName`, or the Pod stays Pending;
 - a ConfigMap `konmon-config` with the [config file](config.md) (`/config/konmon.yaml`). konmon reads it at startup: restart it after a change, or let [Reloader](https://github.com/stakater/Reloader) do it (`reloader.stakater.com/auto: "true"` on the Deployment);
 - a Deployment with exactly one replica (one writer per database), non-root, read-only root filesystem, and these probes:
@@ -143,6 +143,14 @@ A type which konmon may not list at its start is skipped, not stale: after a res
 ```yaml
 - alert: KonmonSkippedResourceType
   expr: konmon_skipped_resource_type{reason="Forbidden"}
+  for: 15m
+```
+
+A kubelet whose summary API konmon cannot read (or Nodes it cannot list, `node=""`) means the volumes there are not checked by `pvc-almost-full`; their findings keep their state. Alert on it:
+
+```yaml
+- alert: KonmonVolumeStatsFailing
+  expr: konmon_volume_stats_failed_node
   for: 15m
 ```
 

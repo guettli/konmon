@@ -21,14 +21,20 @@ type VolumeStats struct {
 	Inodes            *uint64
 	InodesUsed        *uint64
 	InodesFree        *uint64
+	// Stale: the kubelet could not be asked for a while; these are the
+	// last known numbers.
+	Stale bool
 }
 
 // SetVolumeStats gives checks which use "volume-stats" the usage of
-// volumes. Without it, ctx.volumeStats throws: the stats are not known, which
-// is not the same as a PVC which is not mounted.
-func (s *Snapshot) SetVolumeStats(stats map[VolumeKey]VolumeStats) {
+// volumes. complete: every kubelet was asked successfully, so a PVC without
+// stats is not mounted. Without SetVolumeStats, or for a PVC without stats
+// if not complete, or for stale stats, ctx.volumeStats throws and the
+// previous findings stay: not known is not the same as not mounted.
+func (s *Snapshot) SetVolumeStats(stats map[VolumeKey]VolumeStats, complete bool) {
 	if stats == nil {
 		stats = map[VolumeKey]VolumeStats{}
 	}
 	s.volumes = stats
+	s.volumesComplete = complete
 }

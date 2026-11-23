@@ -293,7 +293,12 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 			rt.throwUncovered(errors.New("volume stats are not collected yet"))
 		}
 		st, ok := rt.snap.volumes[key]
-		if !ok {
+		switch {
+		case ok && st.Stale:
+			rt.throwUncovered(fmt.Errorf("volume stats of %s/%s are out of date: the kubelet of node %s could not be asked", key.Namespace, key.PVC, st.Node))
+		case !ok && !rt.snap.volumesComplete:
+			rt.throwUncovered(errors.New("volume stats are not known: the kubelet of some node could not be asked"))
+		case !ok:
 			return goja.Null()
 		}
 		o := vm.NewObject()

@@ -39,8 +39,12 @@ func updateVolumeStats(ctx context.Context, c *volumestats.Collector, core corev
 ) {
 	nodes, err := volumeStatsNodes(ctx, core, selector)
 	if err != nil {
-		if ctx.Err() == nil && !failing[""] {
-			log.Warn("cannot list Nodes for volume stats; checks which use volume-stats see no new data", "err", err)
+		if ctx.Err() != nil {
+			return
+		}
+		c.ListFailed(err)
+		if !failing[""] {
+			log.Warn("cannot list Nodes for volume stats (needs list on nodes); the volume usage is not checked", "err", err)
 		}
 		failing[""] = true
 		return
@@ -88,7 +92,7 @@ func collectVolumeStats(ctx context.Context, c *volumestats.Collector, core core
 }
 
 // volumeStatsFunc returns the stats of c for the monitor; nil if c is nil.
-func volumeStatsFunc(c *volumestats.Collector) func() map[checks.VolumeKey]checks.VolumeStats {
+func volumeStatsFunc(c *volumestats.Collector) func(time.Time) (map[checks.VolumeKey]checks.VolumeStats, bool) {
 	if c == nil {
 		return nil
 	}

@@ -77,17 +77,21 @@ func parse(data []byte, node string) (map[checks.VolumeKey]checks.VolumeStats, e
 	return result, nil
 }
 
-// Collector keeps the latest stats of all Nodes.
+// Collector keeps the latest stats of all Nodes. It is safe for concurrent
+// use.
 type Collector struct {
 	// Client is a REST client of the core API group.
 	Client rest.Interface
-	// MaxAge: the stats of a Node whose summary could not be read for this
-	// long are dropped.
+	// MaxAge: the stats of a Node which were not read for this long (its
+	// kubelet fails, or the Nodes cannot be listed) are stale. Stale stats
+	// are kept, marked as such, until the Node is gone, so a check can tell
+	// "not known" from "not mounted".
 	MaxAge time.Duration
 
 	mu      sync.Mutex
 	byNode  map[string]nodeStats
 	failed  map[string]error
+	listErr error
 	fetched bool
 }
 
@@ -97,8 +101,7 @@ type nodeStats struct {
 }
 
 // Update reads the summaries of the given Nodes. It returns the errors per
-// Node; the stats of a failed Node are kept until they are older than
-// MaxAge.
+// Node. The lock is not held while the kubelets are asked.
 func (c *Collector) Update(ctx context.Context, nodes []string, now time.Time) map[string]error {
 	type result struct {
 		node  string
@@ -117,55 +120,85 @@ func (c *Collector) Update(ctx context.Context, nodes []string, now time.Time) m
 			results <- result{n, s, err}
 		}()
 	}
+	fetched := map[string]map[checks.VolumeKey]checks.VolumeStats{}
 	failed := map[string]error{}
+	for range nodes {
+		r := <-results
+		if r.err != nil {
+			failed[r.node] = r.err
+			continue
+		}
+		fetched[r.node] = r.stats
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byNode == nil {
 		c.byNode = map[string]nodeStats{}
 	}
-	current := map[string]bool{}
-	for range nodes {
-		r := <-results
-		current[r.node] = true
-		if r.err != nil {
-			failed[r.node] = r.err
-			continue
-		}
-		c.byNode[r.node] = nodeStats{at: now, stats: r.stats}
+	current := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		current[n] = true
 	}
-	for n, s := range c.byNode {
-		if !current[n] || now.Sub(s.at) > c.MaxAge {
+	for n := range c.byNode {
+		if !current[n] {
+			// The Node is gone, and so are its Pods.
 			delete(c.byNode, n)
 		}
 	}
+	for n, s := range fetched {
+		c.byNode[n] = nodeStats{at: now, stats: s}
+	}
 	c.failed = failed
+	c.listErr = nil
 	c.fetched = true
 	return failed
 }
 
-// Stats returns the stats of all PVCs; nil before the first Update.
-func (c *Collector) Stats() map[checks.VolumeKey]checks.VolumeStats {
+// ListFailed records that the Nodes could not be listed: the stats are not
+// updated, and they become stale after MaxAge.
+func (c *Collector) ListFailed(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listErr = err
+}
+
+// Stats returns the stats of all PVCs; stats nil before the first Update.
+// Stats of Nodes which were not read for MaxAge are marked Stale. complete
+// is false if a Node failed or the Nodes could not be listed in the last
+// try: then a PVC without stats may be mounted on a Node which failed.
+func (c *Collector) Stats(now time.Time) (stats map[checks.VolumeKey]checks.VolumeStats, complete bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.fetched {
-		return nil
+		return nil, false
 	}
 	all := map[checks.VolumeKey]checks.VolumeStats{}
 	for _, ns := range c.byNode {
+		stale := now.Sub(ns.at) > c.MaxAge
 		for k, v := range ns.stats {
-			if old, ok := all[k]; ok && !v.Time.After(old.Time) {
+			if old, ok := all[k]; ok && (!old.Stale && stale || old.Stale == stale && !v.Time.After(old.Time)) {
 				continue
 			}
+			v.Stale = stale
 			all[k] = v
 		}
 	}
-	return all
+	return all, len(c.failed) == 0 && c.listErr == nil
 }
 
 // Failed returns the Nodes whose summary could not be read in the last
-// Update.
+// try; the key "" if the Nodes could not be listed.
 func (c *Collector) Failed() map[string]error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.failed
+	if c.listErr == nil {
+		return c.failed
+	}
+	failed := make(map[string]error, len(c.failed)+1)
+	for n, err := range c.failed {
+		failed[n] = err
+	}
+	failed[""] = c.listErr
+	return failed
 }

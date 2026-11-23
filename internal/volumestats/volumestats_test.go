@@ -1,6 +1,7 @@
 package volumestats
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,35 +77,52 @@ func TestCollector(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Collector{Client: client, MaxAge: 3 * time.Minute}
-	if c.Stats() != nil {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if s, _ := c.Stats(t0); s != nil {
 		t.Fatal("stats before the first update")
 	}
-	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	n2 := checks.VolumeKey{Namespace: "x", PVC: "c"}
 	if failed := c.Update(t.Context(), []string{"n1", "n2"}, t0); len(failed) != 0 {
 		t.Fatalf("failed: %v", failed)
 	}
-	if s := c.Stats(); len(s) != 2 {
-		t.Fatalf("stats: %v", s)
+	if s, complete := c.Stats(t0); len(s) != 2 || !complete {
+		t.Fatalf("stats: %v %v", s, complete)
 	}
 
-	// A failing Node keeps its stats for MaxAge.
+	// A failing Node: incomplete, its stats are kept and become stale
+	// after MaxAge, but they are not dropped.
 	failN2 = true
 	if failed := c.Update(t.Context(), []string{"n1", "n2"}, t0.Add(time.Minute)); failed["n2"] == nil || len(failed) != 1 {
 		t.Fatalf("failed: %v", failed)
 	}
-	if s := c.Stats(); len(s) != 2 || len(c.Failed()) != 1 {
-		t.Fatalf("stats: %v", s)
+	if s, complete := c.Stats(t0.Add(time.Minute)); len(s) != 2 || complete || s[n2].Stale || len(c.Failed()) != 1 {
+		t.Fatalf("stats: %v %v", s, complete)
 	}
 	c.Update(t.Context(), []string{"n1", "n2"}, t0.Add(4*time.Minute))
-	if s := c.Stats(); len(s) != 1 {
+	if s, _ := c.Stats(t0.Add(4 * time.Minute)); len(s) != 2 || !s[n2].Stale || s[checks.VolumeKey{Namespace: "default", PVC: "data-db-0"}].Stale {
 		t.Fatalf("stats after MaxAge: %v", s)
 	}
 
-	// A Node which is gone is dropped at once.
+	// The Nodes cannot be listed: incomplete, everything becomes stale.
 	failN2 = false
 	c.Update(t.Context(), []string{"n1", "n2"}, t0.Add(5*time.Minute))
-	c.Update(t.Context(), []string{"n1"}, t0.Add(6*time.Minute))
-	if s := c.Stats(); len(s) != 1 || len(c.Failed()) != 0 {
-		t.Fatalf("stats: %v", s)
+	c.ListFailed(errors.New("forbidden"))
+	if f := c.Failed(); len(f) != 1 || f[""] == nil {
+		t.Fatalf("failed: %v", f)
+	}
+	s, complete := c.Stats(t0.Add(9 * time.Minute))
+	if complete || len(s) != 2 {
+		t.Fatalf("stats: %v %v", s, complete)
+	}
+	for k, v := range s {
+		if !v.Stale {
+			t.Errorf("%v not stale", k)
+		}
+	}
+
+	// A Node which is gone is dropped at once.
+	c.Update(t.Context(), []string{"n1"}, t0.Add(10*time.Minute))
+	if s, complete := c.Stats(t0.Add(10 * time.Minute)); len(s) != 1 || !complete || len(c.Failed()) != 0 {
+		t.Fatalf("stats: %v %v", s, complete)
 	}
 }

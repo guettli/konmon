@@ -29,7 +29,8 @@ type Snapshot struct {
 	// pending types are watched, but their objects are not known yet.
 	pending map[schema.GroupResource]struct{}
 	// volumes: see SetVolumeStats; nil if not known.
-	volumes map[VolumeKey]VolumeStats
+	volumes         map[VolumeKey]VolumeStats
+	volumesComplete bool
 }
 
 type nameKey struct {

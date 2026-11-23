@@ -890,7 +890,7 @@ export default defineCheck({
 
 	used := uint64(42)
 	snap := NewSnapshot([]Item{pod("a"), pod("b")}, []schema.GroupVersionResource{podsGVR})
-	snap.SetVolumeStats(map[VolumeKey]VolumeStats{{Namespace: "default", PVC: "a"}: {Node: "n1", Time: now, UsedBytes: &used}})
+	snap.SetVolumeStats(map[VolumeKey]VolumeStats{{Namespace: "default", PVC: "a"}: {Node: "n1", Time: now, UsedBytes: &used}}, true)
 	res, err = e.Evaluate(context.Background(), snap, nil, now)
 	if err != nil {
 		t.Fatal(err)
@@ -901,6 +901,31 @@ export default defineCheck({
 	}
 	if len(res.Failures) != 0 || got["a"] != "n1 42 undefined 2026-01-01T00:00:00.000Z" || got["b"] != "none" {
 		t.Errorf("findings %v, failures %+v", got, res.Failures)
+	}
+
+	// Some kubelet failed: a PVC without stats may be mounted there, and
+	// stale stats are not used. Both keep the previous findings.
+	snap = NewSnapshot([]Item{pod("a"), pod("b"), pod("c")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetVolumeStats(map[VolumeKey]VolumeStats{
+		{Namespace: "default", PVC: "a"}: {Node: "n1", Time: now, UsedBytes: &used},
+		{Namespace: "default", PVC: "c"}: {Node: "n2", Time: now, UsedBytes: &used, Stale: true},
+	}, false)
+	res, err = e.Evaluate(context.Background(), snap, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := map[string]Failure{}
+	for _, f := range res.Failures {
+		failed[f.Object] = f
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Name != "a" || len(failed) != 2 {
+		t.Fatalf("findings %+v, failures %+v", res.Findings, res.Failures)
+	}
+	if f := failed["default/b"]; !f.Uncovered || !strings.Contains(f.Err.Error(), "some node could not be asked") {
+		t.Errorf("b: %+v", f)
+	}
+	if f := failed["default/c"]; !f.Uncovered || !strings.Contains(f.Err.Error(), "out of date: the kubelet of node n2") {
+		t.Errorf("c: %+v", f)
 	}
 }
 

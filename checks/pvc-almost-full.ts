@@ -4,7 +4,8 @@
 // volumes are checked. Volumes which are read-only (access mode
 // ReadOnlyMany only, or every Pod mounts them read-only) are skipped: a
 // read-only image is full by design. On a shared filesystem (local-path,
-// hostPath) the kubelet reports the whole filesystem.
+// hostPath) the kubelet reports the whole filesystem of a local PV and
+// nothing for a hostPath PV.
 import { defineCheck, type KubeObject } from "konmon";
 
 function percent(used: number | undefined, free: number | undefined, total: number | undefined): number | undefined {
@@ -63,25 +64,43 @@ export default defineCheck({
   check(pvc, ctx) {
     const st = ctx.volumeStats(pvc);
     if (!st) return [];
-    if (readOnly(pvc, ctx.list("pods", { namespace: pvc.metadata.namespace }))) return [];
-    const findings = [];
-    const details = { node: st.node, pod: st.pod };
     const space = percent(st.usedBytes, st.availableBytes, st.capacityBytes);
-    if (space !== undefined && space >= ctx.params.percent) {
+    const inodes = percent(st.inodesUsed, st.inodesFree, st.inodes);
+    const full = (p: number | undefined): p is number => p !== undefined && p >= ctx.params.percent;
+    if (!full(space) && !full(inodes)) return [];
+    // Only now: it lists the Pods of the namespace.
+    if (readOnly(pvc, ctx.list("pods", { namespace: pvc.metadata.namespace }))) return [];
+    // Unknown numbers are left out, not reported as 0.
+    const known = (o: Record<string, number | undefined>): Record<string, number> => {
+      const r: Record<string, number> = {};
+      for (const [k, v] of Object.entries(o)) if (v !== undefined) r[k] = v;
+      return r;
+    };
+    const findings = [];
+    if (full(space)) {
       const free = st.availableBytes !== undefined ? `, ${bytes(st.availableBytes)} free` : "";
       const of = st.capacityBytes !== undefined ? ` of ${bytes(st.capacityBytes)}` : "";
       findings.push({
         key: "bytes",
         message: `volume is ${Math.floor(space)}% full (${bytes(st.usedBytes ?? 0)} used${of}${free})`,
-        details: { ...details, usedBytes: st.usedBytes ?? 0, availableBytes: st.availableBytes ?? 0 },
+        details: {
+          node: st.node,
+          pod: st.pod,
+          ...known({ usedBytes: st.usedBytes, availableBytes: st.availableBytes, capacityBytes: st.capacityBytes }),
+        },
       });
     }
-    const inodes = percent(st.inodesUsed, st.inodesFree, st.inodes);
-    if (inodes !== undefined && inodes >= ctx.params.percent) {
+    if (full(inodes)) {
+      const of = st.inodes !== undefined ? ` of ${st.inodes}` : "";
+      const free = st.inodesFree !== undefined ? `, ${st.inodesFree} free` : "";
       findings.push({
         key: "inodes",
-        message: `volume has used ${Math.floor(inodes)}% of its inodes (${st.inodesUsed} of ${st.inodes})`,
-        details: { ...details, inodesUsed: st.inodesUsed ?? 0, inodes: st.inodes ?? 0 },
+        message: `volume has used ${Math.floor(inodes)}% of its inodes (${st.inodesUsed ?? 0} used${of}${free})`,
+        details: {
+          node: st.node,
+          pod: st.pod,
+          ...known({ inodesUsed: st.inodesUsed, inodesFree: st.inodesFree, inodes: st.inodes }),
+        },
       });
     }
     return findings;
