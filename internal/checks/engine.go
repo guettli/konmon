@@ -199,6 +199,17 @@ func (e *Engine) UsesHistory() bool {
 	return false
 }
 
+// UsesVolumeStats reports whether a check needs the usage of volumes
+// (Snapshot.SetVolumeStats).
+func (e *Engine) UsesVolumeStats() bool {
+	for _, d := range e.defs {
+		if d.uses("volume-stats") {
+			return true
+		}
+	}
+	return false
+}
+
 // Failure is a check which threw (or returned invalid findings) for one
 // object. The previous findings of that check for that object should stay
 // as they are: the check did not say they are resolved.

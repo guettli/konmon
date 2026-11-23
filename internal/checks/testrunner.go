@@ -54,6 +54,22 @@ type TestCase struct {
 		Message            string    `json:"message"`
 		LastTransitionTime string    `json:"lastTransitionTime"`
 	} `json:"history"`
+	// VolumeStats is what ctx.volumeStats returns; namespace and pvc
+	// default to those of the object.
+	VolumeStats []struct {
+		Namespace      string    `json:"namespace"`
+		PVC            string    `json:"pvc"`
+		Node           string    `json:"node"`
+		Pod            string    `json:"pod"`
+		Volume         string    `json:"volume"`
+		Time           time.Time `json:"time"`
+		UsedBytes      *uint64   `json:"usedBytes"`
+		CapacityBytes  *uint64   `json:"capacityBytes"`
+		AvailableBytes *uint64   `json:"availableBytes"`
+		Inodes         *uint64   `json:"inodes"`
+		InodesUsed     *uint64   `json:"inodesUsed"`
+		InodesFree     *uint64   `json:"inodesFree"`
+	} `json:"volumeStats"`
 	// Expect lists the findings; only the given fields are compared.
 	Expect []map[string]any `json:"expect"`
 	// ExpectError is a substring of the error, if the check should fail.
@@ -178,6 +194,26 @@ func (e *Engine) runCase(def *Definition, tc *TestCase) error {
 		return err
 	}
 	snap := NewSnapshot(items, available)
+	volumes := map[VolumeKey]VolumeStats{}
+	for _, v := range tc.VolumeStats {
+		key := VolumeKey{Namespace: v.Namespace, PVC: v.PVC}
+		if key.Namespace == "" {
+			key.Namespace = item.Obj.GetNamespace()
+		}
+		if key.PVC == "" {
+			key.PVC = item.Obj.GetName()
+		}
+		t := v.Time
+		if t.IsZero() {
+			t = now
+		}
+		volumes[key] = VolumeStats{
+			Node: v.Node, Pod: v.Pod, Volume: v.Volume, Time: t,
+			UsedBytes: v.UsedBytes, CapacityBytes: v.CapacityBytes, AvailableBytes: v.AvailableBytes,
+			Inodes: v.Inodes, InodesUsed: v.InodesUsed, InodesFree: v.InodesFree,
+		}
+	}
+	snap.SetVolumeStats(volumes)
 	rt.begin(snap, hist, now)
 	if !d.Matches(item.GVR.GroupResource()) {
 		return fmt.Errorf("check %s does not match resource %s", d.Name, tc.Resource)

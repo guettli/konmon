@@ -283,6 +283,35 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 	})
 	rt.freeze(history)
 	rt.set(ctx, "history", history)
+	rt.set(ctx, "volumeStats", func(pvc goja.Value) goja.Value {
+		if !lc.def.uses("volume-stats") {
+			panic(vm.NewTypeError(fmt.Sprintf("check %s uses ctx.volumeStats but does not declare uses: [\"volume-stats\"]", lc.def.Name)))
+		}
+		key := volumeKeyOf(vm, pvc)
+		if rt.snap.volumes == nil {
+			// Not collected yet: the previous findings of the PVC are kept.
+			rt.throwUncovered(errors.New("volume stats are not collected yet"))
+		}
+		st, ok := rt.snap.volumes[key]
+		if !ok {
+			return goja.Null()
+		}
+		o := vm.NewObject()
+		must(o.Set("node", st.Node))
+		must(o.Set("pod", st.Pod))
+		must(o.Set("volume", st.Volume))
+		must(o.Set("time", rt.newDate(st.Time)))
+		for name, v := range map[string]*uint64{
+			"usedBytes": st.UsedBytes, "capacityBytes": st.CapacityBytes, "availableBytes": st.AvailableBytes,
+			"inodes": st.Inodes, "inodesUsed": st.InodesUsed, "inodesFree": st.InodesFree,
+		} {
+			if v != nil {
+				must(o.Set(name, float64(*v)))
+			}
+		}
+		rt.freeze(o)
+		return o
+	})
 	rt.set(ctx, "log", rt.log)
 	rt.freeze(ctx)
 	return ctx
@@ -377,6 +406,29 @@ func (rt *jsRuntime) listOptions(v goja.Value) listOptions {
 		}
 	}
 	return o
+}
+
+// volumeKeyOf accepts a PersistentVolumeClaim object.
+func volumeKeyOf(vm *goja.Runtime, v goja.Value) VolumeKey {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		panic(vm.NewTypeError("volumeStats: expected a PersistentVolumeClaim"))
+	}
+	md := v.ToObject(vm).Get("metadata")
+	if md == nil || goja.IsUndefined(md) || goja.IsNull(md) {
+		panic(vm.NewTypeError("volumeStats: expected a PersistentVolumeClaim"))
+	}
+	m := md.ToObject(vm)
+	str := func(name string) string {
+		if x := m.Get(name); x != nil && !goja.IsUndefined(x) && !goja.IsNull(x) {
+			return x.String()
+		}
+		return ""
+	}
+	key := VolumeKey{Namespace: str("namespace"), PVC: str("name")}
+	if key.Namespace == "" || key.PVC == "" {
+		panic(vm.NewTypeError("volumeStats: expected a PersistentVolumeClaim with metadata.namespace and metadata.name"))
+	}
+	return key
 }
 
 // uidOf accepts an object (its metadata.uid) or a UID string.

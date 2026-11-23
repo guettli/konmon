@@ -83,6 +83,26 @@ declare module "konmon" {
     readonly lastTransitionTime: string;
   }
 
+  /**
+   * The usage of the volume of a PersistentVolumeClaim, as the kubelet of
+   * the Node which mounts it reports it (summary API). Fields the kubelet
+   * does not report are undefined. For volumes on a shared filesystem
+   * (local-path, hostPath) the numbers are those of the whole filesystem.
+   */
+  export interface VolumeStats {
+    readonly node: string;
+    readonly pod: string;
+    /** The name of the volume in the Pod spec. */
+    readonly volume: string;
+    readonly time: Date;
+    readonly usedBytes?: number;
+    readonly capacityBytes?: number;
+    readonly availableBytes?: number;
+    readonly inodes?: number;
+    readonly inodesUsed?: number;
+    readonly inodesFree?: number;
+  }
+
   export interface Context<P> {
     /** The time of this evaluation. Date and Math.random are deterministic. */
     readonly now: Date;
@@ -110,6 +130,12 @@ declare module "konmon" {
       /** Condition changes of an object. Needs uses: ["history"]. */
       conditions(obj: KubeObject | string, since?: Date): ConditionChange[];
     };
+    /**
+     * The usage of the volume of a PersistentVolumeClaim; null if no Pod
+     * mounts it (or its kubelet could not be asked). Needs
+     * uses: ["volume-stats"].
+     */
+    volumeStats(pvc: KubeObject): VolumeStats | null;
     /** Debug logging (konmon --log-level debug). */
     log(...args: unknown[]): void;
   }
@@ -136,7 +162,7 @@ declare module "konmon" {
      * are metadata only (apiVersion, kind, metadata; no data).
      */
     reads?: string[];
-    uses?: "history"[];
+    uses?: ("history" | "volume-stats")[];
     /**
      * How long a finding must be open before it fires, for this check;
      * default: konmon's --for (2m). For states which are normal for a

@@ -1,0 +1,192 @@
+check: pvc-almost-full
+cases:
+  - name: 95% full
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {accessModes: [ReadWriteOnce]}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: db-0, namespace: default}
+          spec:
+            volumes: [{name: data, persistentVolumeClaim: {claimName: data}}]
+            containers: [{name: db, volumeMounts: [{name: data, mountPath: /data}]}]
+    volumeStats:
+      - {node: n1, pod: db-0, usedBytes: 10200547328, availableBytes: 536870912, capacityBytes: 10737418240}
+    expect:
+      - {key: bytes, message: "volume is 95% full (9.5 GiB used of 10.0 GiB, 512.0 MiB free)", details: {node: n1, pod: db-0, usedBytes: "10200547328", availableBytes: "536870912"}}
+  - name: below the threshold
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {usedBytes: 8589934592, availableBytes: 2147483648, capacityBytes: 10737418240, inodes: 100, inodesUsed: 50, inodesFree: 50}
+    expect: []
+  - name: exactly at the threshold
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {usedBytes: 90, availableBytes: 10, capacityBytes: 100}
+    expect:
+      - {key: bytes, message: "volume is 90% full (90 B used of 100 B, 10 B free)"}
+  - name: reserved blocks count as used, like df
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      # 85% of the capacity is used, but 10% are reserved for root.
+      - {usedBytes: 85, availableBytes: 5, capacityBytes: 100}
+    expect:
+      - {key: bytes, message: "volume is 94% full (85 B used of 100 B, 5 B free)"}
+  - name: no available bytes reported
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {usedBytes: 95, capacityBytes: 100}
+    expect:
+      - {key: bytes, message: "volume is 95% full (95 B used of 100 B)"}
+  - name: inodes used up
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {usedBytes: 10, availableBytes: 90, capacityBytes: 100, inodes: 1000, inodesUsed: 990, inodesFree: 10}
+    expect:
+      - {key: inodes, message: "volume has used 99% of its inodes (990 of 1000)"}
+  - name: threshold as parameter
+    resource: persistentvolumeclaims
+    available: [pods]
+    params: {percent: 80}
+    object:
+      metadata: {name: data, namespace: default}
+    volumeStats:
+      - {usedBytes: 85, availableBytes: 15, capacityBytes: 100}
+    expect:
+      - {key: bytes}
+  - name: not mounted
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+    expect: []
+  - name: ReadOnlyMany only (a read-only image)
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: image, namespace: default}
+      spec: {accessModes: [ReadOnlyMany]}
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect: []
+  - name: mounted read-only in the volume
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: image, namespace: default}
+      spec: {accessModes: [ReadWriteOnce]}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: app, namespace: default}
+          spec:
+            volumes: [{name: img, persistentVolumeClaim: {claimName: image, readOnly: true}}]
+            containers: [{name: app, volumeMounts: [{name: img, mountPath: /img}]}]
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect: []
+  - name: mounted read-only by every container
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: image, namespace: default}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: app, namespace: default}
+          spec:
+            volumes: [{name: img, persistentVolumeClaim: {claimName: image}}]
+            initContainers: [{name: init, volumeMounts: [{name: img, mountPath: /img, readOnly: true}]}]
+            containers: [{name: app, volumeMounts: [{name: img, mountPath: /img, readOnly: true}]}]
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect: []
+  - name: one container mounts it writable
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: data, namespace: default}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: app, namespace: default}
+          spec:
+            volumes: [{name: d, persistentVolumeClaim: {claimName: data}}]
+            containers:
+              - {name: reader, volumeMounts: [{name: d, mountPath: /d, readOnly: true}]}
+              - {name: writer, volumeMounts: [{name: d, mountPath: /d}]}
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect:
+      - {key: bytes, message: "volume is 100% full (100 B used of 100 B, 0 B free)"}
+  - name: one Pod read-only, another writable
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: data, namespace: default}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: reader, namespace: default}
+          spec:
+            volumes: [{name: d, persistentVolumeClaim: {claimName: data, readOnly: true}}]
+            containers: [{name: c, volumeMounts: [{name: d, mountPath: /d}]}]
+      - resource: pods
+        object:
+          metadata: {name: writer, namespace: default}
+          spec:
+            volumes: [{name: d, persistentVolumeClaim: {claimName: data}}]
+            containers: [{name: c, volumeMounts: [{name: d, mountPath: /d}]}]
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect:
+      - {key: bytes}
+  - name: a finished Pod does not make it writable
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: image, namespace: default}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: ro, namespace: default}
+          spec:
+            volumes: [{name: d, persistentVolumeClaim: {claimName: image, readOnly: true}}]
+            containers: [{name: c, volumeMounts: [{name: d, mountPath: /d}]}]
+      - resource: pods
+        object:
+          metadata: {name: fill, namespace: default}
+          spec:
+            volumes: [{name: d, persistentVolumeClaim: {claimName: image}}]
+            containers: [{name: c, volumeMounts: [{name: d, mountPath: /d}]}]
+          status: {phase: Succeeded}
+    volumeStats:
+      - {usedBytes: 100, availableBytes: 0, capacityBytes: 100}
+    expect: []
+  - name: generic ephemeral volume
+    resource: persistentvolumeclaims
+    object:
+      metadata: {name: app-scratch, namespace: default}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: app, namespace: default}
+          spec:
+            volumes: [{name: scratch, ephemeral: {volumeClaimTemplate: {spec: {}}}}]
+            containers: [{name: c, volumeMounts: [{name: scratch, mountPath: /s}]}]
+    volumeStats:
+      - {usedBytes: 99, availableBytes: 1, capacityBytes: 100}
+    expect:
+      - {key: bytes}
