@@ -19,33 +19,35 @@ konmon run [flags]
 ### Options
 
 ```
-      --alert-log-bytes int                Maximum size of the 'logs' annotation; longer logs are cut at the front. (default 4096)
-      --alert-log-lines int                Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container (of the previous instance if it restarted). Needs get on pods/log. 0 disables it. (default 40)
-      --alertmanager-url strings           Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.
-      --alertmanager-watchdog              Send an always-firing KonmonWatchdog alert, for a dead man's switch.
-      --check-param stringArray            Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.
-      --check-timeout duration             Time limit for one call of a check function. (default 1s)
-      --checks stringArray                 Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
-      --cluster-name string                Value of the 'cluster' label of alerts. Empty: no label.
-      --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
-      --context string                     Kubeconfig context to use. Default: current context.
-      --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.
-      --discovery-interval duration        Time between two discoveries of resource types (new CRDs). (default 5m0s)
-      --enable-check strings               Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
-      --eval-interval duration             Time between two evaluations of all objects. (default 30s)
-      --exclude-namespace strings          Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
-      --exclude-resource strings           Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Of Secrets, only the metadata is read, and only for a check which names them. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
-      --for duration                       How long a finding must be open before it fires. (default 2m0s)
-  -h, --help                               help for run
-      --history-window duration            How much condition history checks which use ctx.history can see. (default 24h0m0s)
-      --ignore-finding-regex stringArray   Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.
-      --kubeconfig string                  Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
-      --listen string                      Address for /healthz (liveness), /readyz (readiness, startup) and /metrics. Empty disables it. (default ":8080")
-      --no-revisions-for strings           Resource types (resource.group, globs allowed) to store without revisions.
-      --resend-resolved duration           How long resolved alerts are re-sent to Alertmanager. (default 15m0s)
-      --retention duration                 How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything. (default 720h0m0s)
-      --revisions                          Store a compressed copy of every changed object, not only the latest version. (default true)
-      --usage-interval duration            Time between two samples of container CPU and memory use from the metrics API (metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it. (default 1m0s)
+      --alert-log-bytes int                 Maximum size of the 'logs' annotation; longer logs are cut at the front. (default 4096)
+      --alert-log-lines int                 Last log lines of the container in the 'logs' annotation of a firing alert about a Pod container (of the previous instance if it restarted). Needs get on pods/log. 0 disables it. (default 40)
+      --alertmanager-url strings            Alertmanager base URL, e.g. http://alertmanager:9093. Can be given multiple times.
+      --alertmanager-watchdog               Send an always-firing KonmonWatchdog alert, for a dead man's switch.
+      --check-param stringArray             Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.
+      --check-timeout duration              Time limit for one call of a check function. (default 1s)
+      --checks stringArray                  Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
+      --cluster-name string                 Value of the 'cluster' label of alerts. Empty: no label.
+      --config stringArray                  Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
+      --context string                      Kubeconfig context to use. Default: current context.
+      --disable-check strings               Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.
+      --discovery-interval duration         Time between two discoveries of resource types (new CRDs). (default 5m0s)
+      --enable-check strings                Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
+      --eval-interval duration              Time between two evaluations of all objects. (default 30s)
+      --exclude-namespace strings           Namespaces to ignore (not stored, not checked). Comma-separated, glob patterns allowed.
+      --exclude-resource strings            Resource types not to check or store, as resource.group (core: resource). Comma-separated, glob patterns allowed. A check can still read them if it lists them in reads. Of Secrets, only the metadata is read, and only for a check which names them. (default [leases.coordination.k8s.io,endpointslices.discovery.k8s.io,events.events.k8s.io])
+      --for duration                        How long a finding must be open before it fires. (default 2m0s)
+  -h, --help                                help for run
+      --history-window duration             How much condition history checks which use ctx.history can see. (default 24h0m0s)
+      --ignore-finding-regex stringArray    Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.
+      --kubeconfig string                   Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
+      --listen string                       Address for /healthz (liveness), /readyz (readiness, startup) and /metrics. Empty disables it. (default ":8080")
+      --no-revisions-for strings            Resource types (resource.group, globs allowed) to store without revisions.
+      --resend-resolved duration            How long resolved alerts are re-sent to Alertmanager. (default 15m0s)
+      --retention duration                  How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything. (default 720h0m0s)
+      --revisions                           Store a compressed copy of every changed object, not only the latest version. (default true)
+      --usage-interval duration             Time between two samples of container CPU and memory use from the metrics API (metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it. (default 1m0s)
+      --volume-stats-interval duration      Time between two reads of the volume usage from the kubelets (summary API via the API server, needs get on nodes/proxy), for checks which use volume-stats (pvc-almost-full). 0 disables it; then disable those checks too. (default 1m0s)
+      --volume-stats-node-selector string   Label selector of the Nodes whose kubelets are asked for volume usage. The default skips virtual kubelets. (default "liqo.io/type!=virtual-node,type!=virtual-kubelet")
 ```
 
 ### Options inherited from parent commands

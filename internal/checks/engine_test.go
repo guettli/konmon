@@ -856,3 +856,92 @@ export default defineCheck({
 		t.Errorf("got %q, want %q (failures %v)", got, want, res.Failures)
 	}
 }
+
+func TestVolumeStats(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "volumes",
+  match: { resources: ["pods"] },
+  uses: ["volume-stats"],
+  check(obj, ctx) {
+    const st = ctx.volumeStats(obj);
+    if (!st) return [{ message: "none" }];
+    try { (st as any).usedBytes = 0; } catch (e) {}
+    return [{ message: st.node + " " + st.usedBytes + " " + st.inodes + " " + st.time.toISOString() }];
+  },
+});`)
+	if !e.UsesVolumeStats() {
+		t.Fatal("UsesVolumeStats: false")
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Not collected yet: uncovered, the previous findings stay.
+	res, err := e.Evaluate(context.Background(), NewSnapshot([]Item{pod("a")}, []schema.GroupVersionResource{podsGVR}), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failures) != 1 || !res.Failures[0].Uncovered || !strings.Contains(res.Failures[0].Err.Error(), "not collected yet") {
+		t.Fatalf("failures: %+v", res.Failures)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("findings: %+v", res.Findings)
+	}
+
+	used := uint64(42)
+	snap := NewSnapshot([]Item{pod("a"), pod("b")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetVolumeStats(map[VolumeKey]VolumeStats{{Namespace: "default", PVC: "a"}: {Node: "n1", Time: now, UsedBytes: &used}}, true)
+	res, err = e.Evaluate(context.Background(), snap, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range res.Findings {
+		got[f.Name] = f.Message
+	}
+	if len(res.Failures) != 0 || got["a"] != "n1 42 undefined 2026-01-01T00:00:00.000Z" || got["b"] != "none" {
+		t.Errorf("findings %v, failures %+v", got, res.Failures)
+	}
+
+	// Some kubelet failed: a PVC without stats may be mounted there, and
+	// stale stats are not used. Both keep the previous findings.
+	snap = NewSnapshot([]Item{pod("a"), pod("b"), pod("c")}, []schema.GroupVersionResource{podsGVR})
+	snap.SetVolumeStats(map[VolumeKey]VolumeStats{
+		{Namespace: "default", PVC: "a"}: {Node: "n1", Time: now, UsedBytes: &used},
+		{Namespace: "default", PVC: "c"}: {Node: "n2", Time: now, UsedBytes: &used, Stale: true},
+	}, false)
+	res, err = e.Evaluate(context.Background(), snap, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := map[string]Failure{}
+	for _, f := range res.Failures {
+		failed[f.Object] = f
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Name != "a" || len(failed) != 2 {
+		t.Fatalf("findings %+v, failures %+v", res.Findings, res.Failures)
+	}
+	if f := failed["default/b"]; !f.Uncovered || !strings.Contains(f.Err.Error(), "some node could not be asked") {
+		t.Errorf("b: %+v", f)
+	}
+	if f := failed["default/c"]; !f.Uncovered || !strings.Contains(f.Err.Error(), "out of date: the kubelet of node n2") {
+		t.Errorf("c: %+v", f)
+	}
+}
+
+func TestVolumeStatsNeedsUses(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "volumes",
+  match: { resources: ["pods"] },
+  check(obj, ctx) { ctx.volumeStats(obj); return []; },
+});`)
+	if e.UsesVolumeStats() {
+		t.Error("UsesVolumeStats: true")
+	}
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 1 || res.Failures[0].Uncovered || !strings.Contains(res.Failures[0].Err.Error(), `uses: ["volume-stats"]`) {
+		t.Fatalf("failures: %+v", res.Failures)
+	}
+}

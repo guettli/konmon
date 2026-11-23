@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +34,7 @@ import (
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/podlogs"
 	"github.com/guettli/konmon/internal/store"
+	"github.com/guettli/konmon/internal/volumestats"
 	"github.com/guettli/konmon/internal/watch"
 )
 
@@ -54,6 +56,8 @@ var runOpts struct {
 	alertLogLines        int
 	alertLogBytes        int
 	usageInterval        time.Duration
+	volumeStatsInterval  time.Duration
+	volumeStatsNodes     string
 }
 
 var runCmd = &cobra.Command{
@@ -92,6 +96,11 @@ func init() {
 		"(of the previous instance if it restarted). Needs get on pods/log. 0 disables it.")
 	f.DurationVar(&runOpts.usageInterval, "usage-interval", time.Minute, "Time between two samples of container CPU and memory use from the metrics API "+
 		"(metrics-server), kept as hourly buckets for 'konmon suggest-requests'. 0 disables it.")
+	f.DurationVar(&runOpts.volumeStatsInterval, "volume-stats-interval", time.Minute, "Time between two reads of the volume usage from the kubelets "+
+		"(summary API via the API server, needs get on nodes/proxy), for checks which use volume-stats (pvc-almost-full). "+
+		"0 disables it; then disable those checks too.")
+	f.StringVar(&runOpts.volumeStatsNodes, "volume-stats-node-selector", defaultVolumeStatsNodeSelector,
+		"Label selector of the Nodes whose kubelets are asked for volume usage. The default skips virtual kubelets.")
 	f.IntVar(&runOpts.alertLogBytes, "alert-log-bytes", podlogs.DefaultMaxBytes, "Maximum size of the 'logs' annotation; longer logs are cut at the front.")
 
 	rootCmd.AddCommand(runCmd)
@@ -213,8 +222,16 @@ func run(ctx context.Context) error {
 		flagValue{"--retention", runOpts.retention},
 		flagValue{"--resend-resolved", runOpts.resendResolved},
 		flagValue{"--usage-interval", runOpts.usageInterval},
+		flagValue{"--volume-stats-interval", runOpts.volumeStatsInterval},
 	); err != nil {
 		return err
+	}
+	if runOpts.volumeStatsInterval == 0 {
+		for _, d := range engine.Checks() {
+			if slices.Contains(d.Uses, "volume-stats") {
+				return fmt.Errorf("--volume-stats-interval=0, but check %s uses volume-stats: disable it with --disable-check %s", d.Name, d.Name)
+			}
+		}
 	}
 	if runOpts.alertLogLines < 0 {
 		return errors.New("--alert-log-lines must not be negative")
@@ -275,6 +292,16 @@ func run(ctx context.Context) error {
 		Log:          log,
 	}
 
+	var volumes *volumestats.Collector
+	var core corev1client.CoreV1Interface
+	if engine.UsesVolumeStats() {
+		core, err = corev1client.NewForConfig(config)
+		if err != nil {
+			return err
+		}
+		volumes = &volumestats.Collector{Client: core.RESTClient(), MaxAge: 3*runOpts.volumeStatsInterval + time.Minute}
+	}
+
 	var notifier monitor.Notifier
 	if len(runOpts.alertmanagerURLs) > 0 {
 		labels := map[string]string{}
@@ -312,6 +339,7 @@ func run(ctx context.Context) error {
 		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,
+		VolumeStats:       volumeStatsFunc(volumes),
 		StoreRevisions: func(gr schema.GroupResource) bool {
 			return runOpts.revisions && !noRevisions(gr)
 		},
@@ -346,8 +374,17 @@ func run(ctx context.Context) error {
 		}
 		g.Go(func() error { return collectUsage(ctx, st, dyn, lookup, runOpts.usageInterval, log) })
 	}
+	if volumes != nil {
+		g.Go(func() error {
+			return collectVolumeStats(ctx, volumes, core, runOpts.volumeStatsNodes, runOpts.volumeStatsInterval, log)
+		})
+	}
 	if runOpts.listen != "" {
-		srv := healthServer(runOpts.listen, mon, watcher, time.Now(), runOpts.evalInterval)
+		var vf volumeFailures
+		if volumes != nil {
+			vf = volumes
+		}
+		srv := healthServer(runOpts.listen, mon, watcher, vf, time.Now(), runOpts.evalInterval)
 		g.Go(func() error {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return fmt.Errorf("listen %s: %w", runOpts.listen, err)
@@ -381,12 +418,12 @@ const startupGrace = 10 * time.Minute
 //     without a startup probe from killing a slow initial sync.
 //   - /metrics: Prometheus metrics, to alert from outside when konmon does
 //     not evaluate (konmon cannot report that about itself).
-func healthServer(addr string, ev evaluations, types watchedTypes, started time.Time, evalInterval time.Duration) *http.Server {
+func healthServer(addr string, ev evaluations, types watchedTypes, volumes volumeFailures, started time.Time, evalInterval time.Duration) *http.Server {
 	lastEvaluation := ev.LastEvaluation
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, ev, types, started, evalInterval)
+		writeMetrics(w, ev, types, volumes, started, evalInterval)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		last := lastEvaluation()
@@ -414,9 +451,15 @@ type watchedTypes interface {
 	Skipped() []watch.SkippedType
 }
 
+// volumeFailures is what the health server needs of the volume stats
+// collector; nil if it does not run.
+type volumeFailures interface {
+	Failed() map[string]error
+}
+
 // writeMetrics writes the metrics in the Prometheus text format. A handful
 // of gauges and one counter: no need for a client library.
-func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, started time.Time, evalInterval time.Duration) {
+func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, volumes volumeFailures, started time.Time, evalInterval time.Duration) {
 	var lastSeconds float64
 	if last := ev.LastEvaluation(); !last.IsZero() {
 		lastSeconds = float64(last.UnixMilli()) / 1000
@@ -458,6 +501,15 @@ func writeMetrics(w io.Writer, ev evaluations, types watchedTypes, started time.
 	slices.SortFunc(skipped, func(a, b watch.SkippedType) int { return strings.Compare(a.String(), b.String()) })
 	for _, t := range skipped {
 		_, _ = fmt.Fprintf(w, "konmon_skipped_resource_type{resource=\"%s\",reason=\"%s\"} 1\n", labelValue(t.String()), labelValue(t.Reason))
+	}
+	if volumes == nil {
+		return
+	}
+	_, _ = fmt.Fprint(w, "# HELP konmon_volume_stats_failed_node Nodes whose kubelet summary API could not be read in the last try: "+
+		"the usage of their volumes is not checked. node=\"\" if the Nodes could not be listed. Always 1.\n"+
+		"# TYPE konmon_volume_stats_failed_node gauge\n")
+	for _, n := range slices.Sorted(maps.Keys(volumes.Failed())) {
+		_, _ = fmt.Fprintf(w, "konmon_volume_stats_failed_node{node=\"%s\"} 1\n", labelValue(n))
 	}
 }
 

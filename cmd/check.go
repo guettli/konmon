@@ -17,12 +17,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/metadata"
 	"k8s.io/klog/v2"
 
 	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/store"
+	"github.com/guettli/konmon/internal/volumestats"
 	"github.com/guettli/konmon/internal/watch"
 )
 
@@ -265,6 +268,20 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	snap := checks.NewSnapshot(snapItems, listed.Available)
 	for gvr, namespaces := range listed.PerNamespace {
 		snap.SetPartial(gvr.GroupResource(), namespaces)
+	}
+	// The kubelets are asked only if there is a PVC to check: every summary
+	// holds the stats of all containers of the Node.
+	pvcs := schema.GroupResource{Resource: "persistentvolumeclaims"}
+	if engine.UsesVolumeStats() && slices.ContainsFunc(snapItems, func(it checks.Item) bool { return it.GVR.GroupResource() == pvcs }) {
+		core, err := corev1client.NewForConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		c := &volumestats.Collector{Client: core.RESTClient(), MaxAge: time.Hour}
+		updateVolumeStats(ctx, c, core, defaultVolumeStatsNodeSelector, map[string]bool{}, log)
+		if v, complete := c.Stats(now); v != nil {
+			snap.SetVolumeStats(v, complete)
+		}
 	}
 	res, err := engine.Evaluate(ctx, snap, hist, now)
 	if err != nil {

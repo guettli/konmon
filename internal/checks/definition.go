@@ -151,8 +151,8 @@ func define(src Source, prg *goja.Program, core bool) (*Definition, error) {
 		return nil, fmt.Errorf("%s: forSeconds must not be negative", src.Path)
 	}
 	for _, u := range d.Uses {
-		if u != "history" {
-			return nil, fmt.Errorf("%s: unknown entry %q in uses (known: history)", src.Path, u)
+		if u != "history" && u != "volume-stats" {
+			return nil, fmt.Errorf("%s: unknown entry %q in uses (known: history, volume-stats)", src.Path, u)
 		}
 	}
 	return d, nil
