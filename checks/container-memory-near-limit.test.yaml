@@ -22,10 +22,10 @@ cases:
     expect:
       - key: app
         container: app
-        message: "container uses 93% of its memory limit (953.7 MiB of 1.0 GiB): at the limit it is OOM-killed"
+        message: "container uses 93% of its memory limit (953.7 MiB working set of 1.0 GiB): at the limit it is OOM-killed unless the kernel can reclaim page cache"
         details: {memoryBytes: "1000000000", limitBytes: "1073741824"}
       - key: proxy
-        message: "container uses 95% of its memory limit (95.0 MiB of 100.0 MiB): at the limit it is OOM-killed"
+        message: "container uses 95% of its memory limit (95.0 MiB working set of 100.0 MiB): at the limit it is OOM-killed unless the kernel can reclaim page cache"
   - name: threshold as a param, decimal limit
     resource: pods
     params: {percent: 50}
@@ -36,7 +36,7 @@ cases:
     containerUsage:
       app: {memoryBytes: 500000000}
     expect:
-      - {key: app, message: "container uses 50% of its memory limit (476.8 MiB of 953.7 MiB): at the limit it is OOM-killed"}
+      - {key: app, message: "container uses 50% of its memory limit (476.8 MiB working set of 953.7 MiB): at the limit it is OOM-killed unless the kernel can reclaim page cache"}
   - name: not measured yet
     resource: pods
     object:
@@ -96,3 +96,54 @@ cases:
       spec: {containers: [{name: app, resources: {limits: {memory: 1Gi}}}]}
       status: {phase: Running}
     expect: []
+  - name: the applied limit of a resize counts, a status without resources does not
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec:
+        containers:
+          - {name: resized, resources: {limits: {memory: 2Gi}}}
+          - {name: old, resources: {limits: {memory: 1Gi}}}
+      status:
+        phase: Running
+        containerStatuses:
+          - {name: resized, resources: {limits: {memory: 1Gi}}}
+          - {name: old}
+    containerUsage:
+      resized: {memoryBytes: 1000000000}
+      old: {memoryBytes: 1000000000}
+    expect:
+      - {key: resized, message: "container uses 93% of its memory limit (953.7 MiB working set of 1.0 GiB): at the limit it is OOM-killed unless the kernel can reclaim page cache"}
+      - {key: old, message: "container uses 93% of its memory limit (953.7 MiB working set of 1.0 GiB): at the limit it is OOM-killed unless the kernel can reclaim page cache"}
+  - name: usage while the metrics API failed the last time is still used
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: app, resources: {limits: {memory: 1Gi}}}]}
+      status: {phase: Running}
+    containerUsage:
+      app: {memoryBytes: 1073741824}
+    containerUsageIncomplete: true
+    expect:
+      - {key: app}
+  - name: a container missing from the usage, no creation time
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      spec: {containers: [{name: app, resources: {limits: {memory: 1Gi}}}, {name: gone, resources: {limits: {memory: 1Gi}}}]}
+      status: {phase: Running}
+    containerUsage:
+      app: {memoryBytes: 1073741824}
+    expect:
+      - {key: app}
+  - name: stale beats the guard against an earlier pod
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, creationTimestamp: "2026-01-01T00:00:00Z"}
+      spec: {containers: [{name: app, resources: {limits: {memory: 1Gi}}}]}
+      status: {phase: Running}
+    containerUsageTime: "2025-12-31T23:00:00Z"
+    containerUsageStale: true
+    containerUsage:
+      app: {memoryBytes: 1073741824}
+    expectError: out of date

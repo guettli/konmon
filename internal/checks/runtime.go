@@ -329,10 +329,10 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 		pu, ok := rt.snap.containers[key]
 		switch {
 		case ok && pu.Stale:
-			rt.throwUncovered(errors.New("container usage is out of date: the metrics API could not be read"))
+			rt.throwUncovered(fmt.Errorf("container usage of %s/%s is out of date: the metrics API could not be read, or did not list the Pod, for a while", key.Namespace, key.Pod))
 		case !ok && !rt.snap.containersComplete:
 			rt.throwUncovered(errors.New("container usage is not known: the metrics API could not be read"))
-		case !ok, !created.IsZero() && pu.Time.Before(created):
+		case !ok, !created.IsZero() && !pu.Time.IsZero() && pu.Time.Before(created):
 			// Not measured yet, or a measurement of an earlier Pod of the
 			// same name.
 			return goja.Null()

@@ -81,8 +81,12 @@ func Fetch(ctx context.Context, dyn dynamic.Interface, namespace string, pods Po
 }
 
 // List lists the current PodMetrics: the use of the containers of every
-// Pod. Containers with invalid numbers are left out.
+// Pod (of namespace; "" for all). Containers with invalid numbers are left
+// out. It gives up after 30s.
 func List(ctx context.Context, dyn dynamic.Interface, namespace string) ([]checks.PodUsage, error) {
+	// An aggregated API which hangs must not stop the sampling for good.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	list, err := dyn.Resource(PodMetrics).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err

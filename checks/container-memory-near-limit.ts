@@ -1,8 +1,13 @@
-// Reports containers whose memory use (working set) reaches a share of
-// their memory limit (default 90%): at the limit the kernel OOM-kills them.
-// The use comes from the metrics API (metrics-server), sampled every
-// --usage-interval; the latest sample counts. Containers without a memory
-// limit are not checked: they are bounded by the Node, not by the limit.
+// Reports containers whose memory use (working set) stays at a share of
+// their memory limit (default 90%) for 15 minutes: at the limit the kernel
+// OOM-kills them unless it can reclaim page cache. The working set includes
+// active page cache, so databases and programs which size their heap to the
+// limit (JVM, GOMEMLIMIT) may sit there harmlessly; raise percent, or
+// disable the check for them in the config file. The use comes from the
+// metrics API (metrics-server), sampled every --usage-interval; the latest
+// sample counts. The limit is the applied one (status, after an in-place
+// resize), else the one of the spec. Containers without a memory limit are
+// not checked: they are bounded by the Node, not by the limit.
 //
 // Ported from Popeye (github.com/derailed/popeye, Apache-2.0),
 // internal/lint/container.go (code 112).
@@ -41,18 +46,24 @@ export default defineCheck({
   name: "container-memory-near-limit",
   match: { resources: ["pods"] },
   uses: ["container-usage"],
+  // A short peak is normal; a level which stays is not.
+  forSeconds: 900,
   params: { percent: 90 },
   check(pod, ctx) {
     const phase = pod.status?.phase;
     if (phase !== "Running" || pod.metadata.deletionTimestamp) return [];
     const spec = pod.spec ?? {};
     // Sidecars (init containers with restartPolicy Always) run alongside.
+    const applied = new Map<string, unknown>();
+    for (const s of [...(pod.status?.containerStatuses ?? []), ...(pod.status?.initContainerStatuses ?? [])]) {
+      if (s.name && s.resources) applied.set(s.name, s.resources.limits?.memory);
+    }
     const limits = new Map<string, number>();
     for (const c of [
       ...(spec.containers ?? []),
       ...(spec.initContainers ?? []).filter((c: any) => c.restartPolicy === "Always"),
     ]) {
-      const limit = parseQuantity(c.resources?.limits?.memory);
+      const limit = parseQuantity(applied.has(c.name) ? applied.get(c.name) : c.resources?.limits?.memory);
       if (c.name && limit !== undefined && limit > 0) limits.set(c.name, limit);
     }
     if (limits.size === 0) return [];
@@ -67,7 +78,7 @@ export default defineCheck({
       findings.push({
         key: name,
         container: name,
-        message: `container uses ${Math.floor(pct)}% of its memory limit (${bytes(used)} of ${bytes(limit)}): at the limit it is OOM-killed`,
+        message: `container uses ${Math.floor(pct)}% of its memory limit (${bytes(used)} working set of ${bytes(limit)}): at the limit it is OOM-killed unless the kernel can reclaim page cache`,
         details: { memoryBytes: used, limitBytes: limit },
       });
     }

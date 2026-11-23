@@ -60,7 +60,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--for` | `2m` | how long a finding must be open before it fires |
 | `--eval-interval` | `30s` | time between two evaluations |
 | `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects, usage buckets); `0` keeps everything |
-| `--usage-interval` | `1m` | sampling of container CPU/memory from the metrics API for [`suggest-requests`](usage.md#suggesting-resource-requests); `0` disables it |
+| `--usage-interval` | `1m` | sampling of container CPU/memory from the metrics API for [`suggest-requests`](usage.md#suggesting-resource-requests) and `container-memory-near-limit`; `0` disables it (then also `--disable-check container-memory-near-limit`, or konmon does not start) |
 | `--revisions` / `--no-revisions-for` | `true` / none | keep a gzip copy of every change, per resource type |
 | `--exclude-namespace` | none | globs, not stored and not checked |
 | `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |
@@ -154,7 +154,7 @@ A kubelet whose summary API konmon cannot read (or Nodes it cannot list, `node="
   for: 15m
 ```
 
-If the metrics API (metrics-server) cannot be read, `container-memory-near-limit` checks nothing; its findings keep their state:
+If the metrics API (metrics-server) cannot be read, `container-memory-near-limit` checks nothing; its findings keep their state. A cluster which does not serve the metrics API at all (no metrics-server) is not a failure: konmon logs it, and the check finds nothing.
 
 ```yaml
 - alert: KonmonContainerUsageFailing

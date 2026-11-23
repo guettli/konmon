@@ -62,7 +62,11 @@ func collectUsage(ctx context.Context, st *store.Store, dyn dynamic.Interface, p
 					return tx.AddUsage(now.UTC().Truncate(time.Hour), samples)
 				})
 			} else if latest != nil && ctx.Err() == nil {
-				latest.Failed(err)
+				if apierrors.IsNotFound(err) {
+					latest.Unavailable()
+				} else {
+					latest.Failed(err)
+				}
 			}
 			switch {
 			case err != nil && ctx.Err() != nil:

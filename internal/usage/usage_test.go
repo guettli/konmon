@@ -182,7 +182,8 @@ func TestLatest(t *testing.T) {
 	if u, complete := l.Usage(now); u == nil || len(u) != 0 || complete {
 		t.Fatalf("first read failed: want an empty, incomplete map, got %+v %v", u, complete)
 	}
-	l.Set([]checks.PodUsage{{Namespace: "ns", Pod: "p", Containers: map[string]checks.ContainerUsage{"app": {Memory: 1}}}}, now)
+	p := checks.PodUsage{Namespace: "ns", Pod: "p", Containers: map[string]checks.ContainerUsage{"app": {Memory: 1}}}
+	l.Set([]checks.PodUsage{p}, now)
 	key := checks.PodKey{Namespace: "ns", Pod: "p"}
 	if u, complete := l.Usage(now); !complete || u[key].Containers["app"].Memory != 1 || u[key].Stale || l.Err() != nil {
 		t.Fatalf("after a read: %+v %v", u, complete)
@@ -194,8 +195,32 @@ func TestLatest(t *testing.T) {
 	if u, _ := l.Usage(now.Add(4 * time.Minute)); !u[key].Stale {
 		t.Fatalf("after MaxAge: want stale: %+v", u)
 	}
+
+	// A Pod which the metrics API skips keeps its last usage, stale after
+	// MaxAge, and is forgotten after an hour.
 	l.Set(nil, now.Add(5*time.Minute))
-	if u, complete := l.Usage(now.Add(5 * time.Minute)); !complete || len(u) != 0 {
-		t.Fatalf("pod gone: %+v %v", u, complete)
+	if u, complete := l.Usage(now.Add(5 * time.Minute)); !complete || !u[key].Stale || u[key].Containers["app"].Memory != 1 {
+		t.Fatalf("pod not listed: want its last usage, stale: %+v %v", u, complete)
+	}
+	l.Set([]checks.PodUsage{p}, now.Add(6*time.Minute))
+	l.Set(nil, now.Add(7*time.Minute))
+	if u, _ := l.Usage(now.Add(7 * time.Minute)); u[key].Stale {
+		t.Fatalf("pod skipped once: want not stale: %+v", u)
+	}
+	l.Set(nil, now.Add(67*time.Minute))
+	if u, complete := l.Usage(now.Add(67 * time.Minute)); !complete || len(u) != 0 {
+		t.Fatalf("pod not listed for an hour: want it forgotten: %+v %v", u, complete)
+	}
+
+	// No metrics-server: nothing to check, and no failure.
+	l.Set([]checks.PodUsage{p}, now)
+	l.Failed(errors.New("down"))
+	l.Unavailable()
+	if u, complete := l.Usage(now); !complete || len(u) != 0 || l.Err() != nil {
+		t.Fatalf("unavailable: want an empty, complete map and no error: %+v %v %v", u, complete, l.Err())
+	}
+	l.Set([]checks.PodUsage{p}, now)
+	if u, complete := l.Usage(now); !complete || len(u) != 1 {
+		t.Fatalf("available again: %+v %v", u, complete)
 	}
 }

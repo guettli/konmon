@@ -287,11 +287,29 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 	podsGR := schema.GroupResource{Resource: "pods"}
 	if engine.UsesContainerUsage() && slices.ContainsFunc(snapItems, func(it checks.Item) bool { return it.GVR.GroupResource() == podsGR }) {
 		l := &usage.Latest{MaxAge: time.Hour}
-		if list, err := usage.List(ctx, dyn, ""); err != nil {
+		// With -n only those namespaces: RBAC may allow no more.
+		namespaces := o.filter.plainNamespaces()
+		if len(namespaces) == 0 {
+			namespaces = []string{""}
+		}
+		var all []checks.PodUsage
+		var err error
+		for _, ns := range namespaces {
+			var list []checks.PodUsage
+			if list, err = usage.List(ctx, dyn, ns); err != nil {
+				break
+			}
+			all = append(all, list...)
+		}
+		switch {
+		case apierrors.IsNotFound(err):
+			log.Warn("metrics API (metrics.k8s.io) not available, install metrics-server; the memory use of containers is not checked")
+			l.Unavailable()
+		case err != nil:
 			log.Warn("cannot read container usage from the metrics API (metrics-server); the memory use of containers is not checked", "err", err)
 			l.Failed(err)
-		} else {
-			l.Set(list, now)
+		default:
+			l.Set(all, now)
 		}
 		if u, complete := l.Usage(now); u != nil {
 			snap.SetContainerUsage(u, complete)
