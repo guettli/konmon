@@ -480,7 +480,7 @@ func TestWatchAndStore(t *testing.T) {
 		watch, stored bool
 	}{
 		{"pods", true, true},
-		{"secrets", false, false},
+		{"secrets", true, false},                        // metadata, read by secret-missing only
 		{"configmaps", true, false},                     // read by configmap-key-missing only
 		{"endpointslices.discovery.k8s.io", true, true}, // conditions matches "*"
 		{"cronjobs.batch", true, true},
