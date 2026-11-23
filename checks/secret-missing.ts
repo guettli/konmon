@@ -1,8 +1,12 @@
 // Reports Pods which reference a Secret which does not exist (and is not
-// optional): a container which starts (again) cannot get it. Only the name
-// is checked: konmon never reads the data of Secrets, so a missing key is
-// not seen. A missing image pull Secret is info only: the kubelet pulls
-// without it, which works for public images.
+// optional): a container which starts (again) cannot get it, or the volume
+// cannot be mounted. Only the name is checked: konmon never reads the data
+// of Secrets, so a missing key is not seen. A missing image pull Secret is
+// info only: the kubelet pulls without it, which works for public images.
+// References are env, envFrom, secret and projected volumes, the
+// nodePublishSecretRef of inline CSI volumes and imagePullSecrets; the
+// secretRefs of deprecated in-tree volume plugins (cephfs, rbd, ...) are
+// not checked.
 //
 // Ported from Popeye (github.com/derailed/popeye, Apache-2.0),
 // internal/lint/pod.go and sa.go (codes 304/305), checked from the Pod's
@@ -15,9 +19,10 @@ export default defineCheck({
   reads: ["secrets"],
   check(pod, ctx) {
     // A finished Pod (e.g. of a Job) may reference a Secret which was
-    // pruned since; it will not start again.
+    // pruned since; it will not start again. A terminating Pod neither
+    // (helm uninstall deletes the Secret and the Deployment at once).
     const phase = pod.status?.phase;
-    if (phase === "Succeeded" || phase === "Failed" || !ctx.has("secrets")) return [];
+    if (phase === "Succeeded" || phase === "Failed" || pod.metadata.deletionTimestamp || !ctx.has("secrets")) return [];
     const ns = pod.metadata.namespace ?? "";
     const findings: Finding[] = [];
     const seen = new Set<string>();
@@ -43,6 +48,7 @@ export default defineCheck({
     }
     for (const v of spec.volumes ?? []) {
       if (v.secret) check(v.secret.secretName, v.secret.optional);
+      if (v.csi?.nodePublishSecretRef) check(v.csi.nodePublishSecretRef.name, false);
       for (const src of v.projected?.sources ?? []) {
         if (src.secret) check(src.secret.name, src.secret.optional);
       }

@@ -9,7 +9,7 @@
 //
 // Ported from Popeye (github.com/derailed/popeye, Apache-2.0),
 // internal/lint/svc.go (code 1106).
-import { defineCheck, Finding, KubeObject, matchesSelector } from "konmon";
+import { defineCheck, Finding, KubeObject } from "konmon";
 
 export default defineCheck({
   name: "service-target-port-missing",
@@ -22,9 +22,8 @@ export default defineCheck({
     const named = (svc.spec?.ports ?? []).filter((p: any) => typeof p.targetPort === "string");
     if (named.length === 0) return [];
     const pods = ctx
-      .list("pods", { namespace: svc.metadata.namespace })
-      .filter((p) => p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed")
-      .filter((p) => matchesSelector(p.metadata.labels, { matchLabels: selector }));
+      .list("pods", { namespace: svc.metadata.namespace, labels: selector })
+      .filter((p) => p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed");
     if (pods.length === 0) return [];
     const has = (pod: KubeObject, name: string, protocol: string) => {
       const spec = pod.spec ?? {};

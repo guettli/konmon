@@ -40,7 +40,9 @@ export default defineCheck({
         findings.push({ message: `${obj.kind ?? ctx.resource.resource} selects no Pods` });
       }
     }
-    if (isPDB || !ctx.has("namespaces")) return findings;
+    if (isPDB) return findings;
+    // Asked only when needed: ctx.has of a type which is not synced yet
+    // keeps all findings of the object as they are.
     let namespaces: KubeObject[] | undefined;
     const seen = new Set<string>();
     const rules = [
@@ -54,7 +56,10 @@ export default defineCheck({
         const sel = selectorString(ns);
         if (seen.has(`${dir} ${sel}`)) continue;
         seen.add(`${dir} ${sel}`);
-        namespaces ??= ctx.list("namespaces");
+        if (namespaces === undefined) {
+          if (!ctx.has("namespaces")) return findings;
+          namespaces = ctx.list("namespaces");
+        }
         if (namespaces.some((n) => matchesSelector(n.metadata.labels, ns))) continue;
         findings.push({
           key: `${dir} namespaces ${sel}`,

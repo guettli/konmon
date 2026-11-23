@@ -11,9 +11,11 @@ export default defineCheck({
   reads: ["configmaps"],
   check(pod, ctx) {
     // A finished Pod (e.g. of a Job) may reference a ConfigMap which was
-    // pruned since; it will not start again.
+    // pruned since; it will not start again. A terminating Pod neither
+    // (helm uninstall deletes the ConfigMap and the Deployment at once).
     const phase = pod.status?.phase;
-    if (phase === "Succeeded" || phase === "Failed" || !ctx.has("configmaps")) return [];
+    if (phase === "Succeeded" || phase === "Failed" || pod.metadata.deletionTimestamp || !ctx.has("configmaps"))
+      return [];
     const ns = pod.metadata.namespace ?? "";
     const findings: Finding[] = [];
     const seen = new Set<string>();

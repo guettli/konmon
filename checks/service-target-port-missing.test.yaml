@@ -69,3 +69,28 @@ cases:
       metadata: {name: ext, namespace: default}
       spec: {ports: [{name: http, port: 80, targetPort: http}]}
     expect: []
+  - name: external name, failed pods, sctp
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        selector: {app: web}
+        ports: [{name: s, port: 9, protocol: SCTP, targetPort: s}]
+    related:
+      - resource: pods
+        object:
+          metadata: {name: ok, namespace: default, labels: {app: web}}
+          spec: {containers: [{name: app, ports: [{name: s, containerPort: 9, protocol: SCTP}]}]}
+      - resource: pods
+        object:
+          metadata: {name: failed, namespace: default, labels: {app: web}}
+          spec: {containers: [{name: app}]}
+          status: {phase: Failed}
+    expect: []
+  - name: external name
+    resource: services
+    available: [pods]
+    object:
+      metadata: {name: ext, namespace: default}
+      spec: {type: ExternalName, externalName: example.com, selector: {app: web}, ports: [{port: 80, targetPort: http}]}
+    expect: []

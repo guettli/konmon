@@ -63,3 +63,28 @@ cases:
         podSelector: {}
         ingress: [{from: [{namespaceSelector: {matchLabels: {x: y}}}]}]
     expect: []
+  - name: same selector in ingress and egress, DoesNotExist
+    resource: networkpolicies.networking.k8s.io
+    object:
+      metadata: {name: n, namespace: default}
+      spec:
+        podSelector: {}
+        ingress: [{from: [{namespaceSelector: {matchLabels: {team: x}}}]}]
+        egress:
+          - to: [{namespaceSelector: {matchLabels: {team: x}}}, {namespaceSelector: {matchExpressions: [{key: team, operator: DoesNotExist}, {key: a, operator: Exists}]}}]
+    related:
+      - {resource: namespaces, object: {metadata: {name: has-team, labels: {team: y}}}}
+      - {resource: pods, object: {metadata: {name: p, namespace: default}}}
+    expect:
+      - {key: ingress namespaces team=x, message: ingress namespaceSelector team=x selects no Namespaces}
+      - {key: egress namespaces team=x, message: egress namespaceSelector team=x selects no Namespaces}
+      - {key: "egress namespaces !team,a", message: "egress namespaceSelector !team,a selects no Namespaces"}
+  - name: pdb does not need namespaces
+    resource: poddisruptionbudgets.policy
+    available: [pods]
+    object:
+      kind: PodDisruptionBudget
+      metadata: {name: b, namespace: default}
+      spec: {selector: {matchLabels: {app: gone}}}
+    expect:
+      - {message: PodDisruptionBudget selects no Pods}

@@ -24,7 +24,7 @@ Health findings can alert; hygiene findings are only recorded and printed. Disab
 | [`pv-failed`](../checks/pv-failed.ts) | health | warning | on | PersistentVolumes in phase Failed: automatic reclamation failed |  | k8sgpt |
 | [`pvc-almost-full`](../checks/pvc-almost-full.ts) | health | warning | on | PersistentVolumeClaims whose volume is almost full: the used space or the used inodes reach a threshold (default 90%) | `percent=90` |  |
 | [`pvc-not-bound`](../checks/pvc-not-bound.ts) | health | warning | on | PersistentVolumeClaims which are Lost, or Pending for longer than a grace period | `pendingGraceSeconds=300` | k8sgpt |
-| [`secret-missing`](../checks/secret-missing.ts) | health | warning | on | Pods which reference a Secret which does not exist (and is not optional): a container which starts (again) cannot get it |  | Popeye |
+| [`secret-missing`](../checks/secret-missing.ts) | health | warning | on | Pods which reference a Secret which does not exist (and is not optional): a container which starts (again) cannot get it, or the volume cannot be mounted |  | Popeye |
 | [`service-target-port-missing`](../checks/service-target-port-missing.ts) | health | warning | on | Service ports whose named targetPort is not a port of any Pod the Service selects: the EndpointSlices list those Pods without that port, so traffic to it fails although the Pods are ready |  | Popeye |
 | [`service-without-endpoints`](../checks/service-without-endpoints.ts) | health | warning | on | Services whose Pods exist but none is ready: traffic to them fails |  | k8sgpt |
 | [`serviceaccount-missing`](../checks/serviceaccount-missing.ts) | health | warning | on | workloads whose Pods use a ServiceAccount which does not exist: the Pods cannot be created |  | Popeye |
@@ -97,7 +97,7 @@ export default defineCheck({
 - `Date` and `Math.random` are deterministic within an evaluation (`ctx.now`). There is no network or filesystem access, and the only import is `konmon`. A call which runs longer than `--check-timeout` fails.
 - A check which throws keeps its previous findings for that object open, so `--for` does not start again, and opens one `check-error` finding per check ("failed for N objects, e.g. …").
 
-A type in `reads` is kept in memory for the whole cluster: `configmap-key-missing` makes konmon watch all ConfigMaps (not stored in the database). Disable it on clusters with many large ConfigMaps.
+A type in `reads` is kept in memory for the whole cluster: `configmap-key-missing` makes konmon watch all ConfigMaps (not stored in the database). Disable it on clusters with many large ConfigMaps. `secret-missing` likewise makes konmon watch the metadata of all Secrets (never their data); without `list` on secrets it is skipped.
 
 Use your checks with `--checks DIR` (repeatable). `--disable-check NAME` (globs) turns checks off, `enabled: false` in the definition makes a check off by default so that only `--enable-check NAME` runs it, `--check-param check.param=value` changes parameters, and `konmon checks list` shows what is enabled (`--all` also the rest, with their state).
 

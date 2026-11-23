@@ -39,3 +39,10 @@ cases:
       spec: {containers: [{name: app, envFrom: [{configMapRef: {name: pruned}}]}]}
       status: {phase: Succeeded}
     expect: []
+  - name: terminating pod
+    resource: pods
+    available: [configmaps]
+    object:
+      metadata: {name: p, namespace: default, deletionTimestamp: "2026-01-01T00:00:00Z"}
+      spec: {containers: [{name: app, envFrom: [{configMapRef: {name: deleted}}]}]}
+    expect: []
