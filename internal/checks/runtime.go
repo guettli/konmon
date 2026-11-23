@@ -317,6 +317,41 @@ func (rt *jsRuntime) newContextBase(lc *loadedCheck) *goja.Object {
 		rt.freeze(o)
 		return o
 	})
+	rt.set(ctx, "containerUsage", func(pod goja.Value) goja.Value {
+		if !lc.def.uses("container-usage") {
+			panic(vm.NewTypeError(fmt.Sprintf("check %s uses ctx.containerUsage but does not declare uses: [\"container-usage\"]", lc.def.Name)))
+		}
+		key, created := podKeyOf(vm, pod)
+		if rt.snap.containers == nil {
+			// Not collected yet: the previous findings of the Pod are kept.
+			rt.throwUncovered(errors.New("container usage is not collected yet"))
+		}
+		pu, ok := rt.snap.containers[key]
+		switch {
+		case ok && pu.Stale:
+			rt.throwUncovered(errors.New("container usage is out of date: the metrics API could not be read"))
+		case !ok && !rt.snap.containersComplete:
+			rt.throwUncovered(errors.New("container usage is not known: the metrics API could not be read"))
+		case !ok, !created.IsZero() && pu.Time.Before(created):
+			// Not measured yet, or a measurement of an earlier Pod of the
+			// same name.
+			return goja.Null()
+		}
+		containers := vm.NewObject()
+		for name, cu := range pu.Containers {
+			c := vm.NewObject()
+			must(c.Set("cpuCores", cu.CPU))
+			must(c.Set("memoryBytes", float64(cu.Memory)))
+			rt.freeze(c)
+			must(containers.Set(name, c))
+		}
+		rt.freeze(containers)
+		o := vm.NewObject()
+		must(o.Set("time", rt.newDate(pu.Time)))
+		must(o.Set("containers", containers))
+		rt.freeze(o)
+		return o
+	})
 	rt.set(ctx, "log", rt.log)
 	rt.freeze(ctx)
 	return ctx
@@ -434,6 +469,31 @@ func volumeKeyOf(vm *goja.Runtime, v goja.Value) VolumeKey {
 		panic(vm.NewTypeError("volumeStats: expected a PersistentVolumeClaim with metadata.namespace and metadata.name"))
 	}
 	return key
+}
+
+// podKeyOf accepts a Pod object; created is its creationTimestamp (zero if
+// not set).
+func podKeyOf(vm *goja.Runtime, v goja.Value) (key PodKey, created time.Time) {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		panic(vm.NewTypeError("containerUsage: expected a Pod"))
+	}
+	md := v.ToObject(vm).Get("metadata")
+	if md == nil || goja.IsUndefined(md) || goja.IsNull(md) {
+		panic(vm.NewTypeError("containerUsage: expected a Pod"))
+	}
+	m := md.ToObject(vm)
+	str := func(name string) string {
+		if x := m.Get(name); x != nil && !goja.IsUndefined(x) && !goja.IsNull(x) {
+			return x.String()
+		}
+		return ""
+	}
+	key = PodKey{Namespace: str("namespace"), Pod: str("name")}
+	if key.Namespace == "" || key.Pod == "" {
+		panic(vm.NewTypeError("containerUsage: expected a Pod with metadata.namespace and metadata.name"))
+	}
+	created, _ = time.Parse(time.RFC3339, str("creationTimestamp"))
+	return key, created
 }
 
 // uidOf accepts an object (its metadata.uid) or a UID string.

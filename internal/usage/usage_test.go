@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+
+	"github.com/guettli/konmon/internal/checks"
 )
 
 func pod(name string, labels map[string]any, owner map[string]any) *unstructured.Unstructured {
@@ -115,7 +118,8 @@ func TestRounding(t *testing.T) {
 func TestFetch(t *testing.T) {
 	pm := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "metrics.k8s.io/v1beta1", "kind": "PodMetrics",
-		"metadata": map[string]any{"name": "web-6d8f-x", "namespace": "ns"},
+		"metadata":  map[string]any{"name": "web-6d8f-x", "namespace": "ns"},
+		"timestamp": "2026-11-23T10:00:00Z",
 		"containers": []any{
 			map[string]any{"name": "app", "usage": map[string]any{"cpu": "123456789n", "memory": "10Mi"}},
 			map[string]any{"name": "broken", "usage": map[string]any{"cpu": "x", "memory": "1Mi"}},
@@ -150,5 +154,48 @@ func TestFetch(t *testing.T) {
 	s := samples[0]
 	if s.Kind != "Deployment" || s.Workload != "web" || s.Container != "app" || s.Memory != 10<<20 || s.CPU < 0.1234 || s.CPU > 0.1235 {
 		t.Errorf("sample %+v", s)
+	}
+
+	// List keeps all Pods, known or not, with the time of the measurement.
+	list, err := List(context.Background(), dyn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("got %+v", list)
+	}
+	for _, pu := range list {
+		if len(pu.Containers) != 1 || pu.Containers["app"].Memory != 10<<20 ||
+			!pu.Time.Equal(time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)) {
+			t.Errorf("pod usage %+v", pu)
+		}
+	}
+}
+
+func TestLatest(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	l := &Latest{MaxAge: 3 * time.Minute}
+	if u, _ := l.Usage(now); u != nil {
+		t.Fatalf("before the first read: %+v", u)
+	}
+	l.Failed(errors.New("down"))
+	if u, complete := l.Usage(now); u == nil || len(u) != 0 || complete {
+		t.Fatalf("first read failed: want an empty, incomplete map, got %+v %v", u, complete)
+	}
+	l.Set([]checks.PodUsage{{Namespace: "ns", Pod: "p", Containers: map[string]checks.ContainerUsage{"app": {Memory: 1}}}}, now)
+	key := checks.PodKey{Namespace: "ns", Pod: "p"}
+	if u, complete := l.Usage(now); !complete || u[key].Containers["app"].Memory != 1 || u[key].Stale || l.Err() != nil {
+		t.Fatalf("after a read: %+v %v", u, complete)
+	}
+	l.Failed(errors.New("down"))
+	if u, complete := l.Usage(now.Add(time.Minute)); complete || u[key].Stale || l.Err() == nil {
+		t.Fatalf("one failed read: want incomplete, not stale: %+v %v", u, complete)
+	}
+	if u, _ := l.Usage(now.Add(4 * time.Minute)); !u[key].Stale {
+		t.Fatalf("after MaxAge: want stale: %+v", u)
+	}
+	l.Set(nil, now.Add(5*time.Minute))
+	if u, complete := l.Usage(now.Add(5 * time.Minute)); !complete || len(u) != 0 {
+		t.Fatalf("pod gone: %+v %v", u, complete)
 	}
 }

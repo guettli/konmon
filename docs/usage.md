@@ -65,7 +65,7 @@ kustomizations.kustomize.toolkit.fluxcd.io flux-system/infra uid=10cb7e5c-… fi
 
 ## Suggesting resource requests
 
-`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment (or Argo Rollout), a CronJob's Jobs for the CronJob. Namespaces excluded with `--exclude-namespace` are not sampled.
+`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it; then disable `container-memory-near-limit` too, which checks the latest sample). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment (or Argo Rollout), a CronJob's Jobs for the CronJob. Namespaces excluded with `--exclude-namespace` are not sampled.
 
 `konmon suggest-requests` turns that into requests:
 

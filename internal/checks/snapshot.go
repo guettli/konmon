@@ -31,6 +31,9 @@ type Snapshot struct {
 	// volumes: see SetVolumeStats; nil if not known.
 	volumes         map[VolumeKey]VolumeStats
 	volumesComplete bool
+	// containers: see SetContainerUsage; nil if not known.
+	containers         map[PodKey]PodUsage
+	containersComplete bool
 }
 
 type nameKey struct {

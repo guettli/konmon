@@ -945,3 +945,20 @@ export default defineCheck({
 		t.Fatalf("failures: %+v", res.Failures)
 	}
 }
+
+func TestContainerUsageNeedsUses(t *testing.T) {
+	e := load(t, `
+import { defineCheck } from "konmon";
+export default defineCheck({
+  name: "usage",
+  match: { resources: ["pods"] },
+  check(obj, ctx) { ctx.containerUsage(obj); return []; },
+});`)
+	if e.UsesContainerUsage() {
+		t.Error("UsesContainerUsage: true")
+	}
+	res := evaluate(t, e, []Item{pod("a")})
+	if len(res.Failures) != 1 || res.Failures[0].Uncovered || !strings.Contains(res.Failures[0].Err.Error(), `uses: ["container-usage"]`) {
+		t.Fatalf("failures: %+v", res.Failures)
+	}
+}

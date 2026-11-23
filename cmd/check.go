@@ -25,6 +25,7 @@ import (
 	"github.com/guettli/konmon/internal/checks"
 	"github.com/guettli/konmon/internal/monitor"
 	"github.com/guettli/konmon/internal/store"
+	"github.com/guettli/konmon/internal/usage"
 	"github.com/guettli/konmon/internal/volumestats"
 	"github.com/guettli/konmon/internal/watch"
 )
@@ -281,6 +282,19 @@ func runChecks(ctx context.Context, o *checkOptions, only []string) (*checkRun, 
 		updateVolumeStats(ctx, c, core, defaultVolumeStatsNodeSelector, map[string]bool{}, log)
 		if v, complete := c.Stats(now); v != nil {
 			snap.SetVolumeStats(v, complete)
+		}
+	}
+	podsGR := schema.GroupResource{Resource: "pods"}
+	if engine.UsesContainerUsage() && slices.ContainsFunc(snapItems, func(it checks.Item) bool { return it.GVR.GroupResource() == podsGR }) {
+		l := &usage.Latest{MaxAge: time.Hour}
+		if list, err := usage.List(ctx, dyn, ""); err != nil {
+			log.Warn("cannot read container usage from the metrics API (metrics-server); the memory use of containers is not checked", "err", err)
+			l.Failed(err)
+		} else {
+			l.Set(list, now)
+		}
+		if u, complete := l.Usage(now); u != nil {
+			snap.SetContainerUsage(u, complete)
 		}
 	}
 	res, err := engine.Evaluate(ctx, snap, hist, now)

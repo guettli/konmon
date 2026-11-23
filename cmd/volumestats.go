@@ -11,6 +11,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"github.com/guettli/konmon/internal/checks"
+	"github.com/guettli/konmon/internal/usage"
 	"github.com/guettli/konmon/internal/volumestats"
 )
 
@@ -97,4 +98,12 @@ func volumeStatsFunc(c *volumestats.Collector) func(time.Time) (map[checks.Volum
 		return nil
 	}
 	return c.Stats
+}
+
+// containerUsageFunc returns the usage of l for the monitor; nil if l is nil.
+func containerUsageFunc(l *usage.Latest) func(time.Time) (map[checks.PodKey]checks.PodUsage, bool) {
+	if l == nil {
+		return nil
+	}
+	return l.Usage
 }

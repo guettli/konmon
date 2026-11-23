@@ -104,6 +104,26 @@ declare module "konmon" {
     readonly inodesFree?: number;
   }
 
+  /**
+   * The use of the containers of a Pod as the metrics API (metrics-server)
+   * reports it.
+   */
+  export interface PodUsage {
+    /** The time of the measurement. */
+    readonly time: Date;
+    /** By container name. */
+    readonly containers: Readonly<
+      Record<
+        string,
+        {
+          readonly cpuCores: number;
+          /** The working set: what counts for the memory limit. */
+          readonly memoryBytes: number;
+        }
+      >
+    >;
+  }
+
   export interface Context<P> {
     /** The time of this evaluation. Date and Math.random are deterministic. */
     readonly now: Date;
@@ -138,6 +158,13 @@ declare module "konmon" {
      * Needs uses: ["volume-stats"].
      */
     volumeStats(pvc: KubeObject): VolumeStats | null;
+    /**
+     * The use of the containers of a Pod; null if the metrics API has no
+     * measurement of it (yet). Throws if it is not known (not read yet, the
+     * metrics API cannot be read, out of date): the previous findings of
+     * the object stay. Needs uses: ["container-usage"].
+     */
+    containerUsage(pod: KubeObject): PodUsage | null;
     /** Debug logging (konmon --log-level debug). */
     log(...args: unknown[]): void;
   }
@@ -164,7 +191,7 @@ declare module "konmon" {
      * are metadata only (apiVersion, kind, metadata; no data).
      */
     reads?: string[];
-    uses?: ("history" | "volume-stats")[];
+    uses?: ("history" | "volume-stats" | "container-usage")[];
     /**
      * How long a finding must be open before it fires, for this check;
      * default: konmon's --for (2m). For states which are normal for a

@@ -7,6 +7,7 @@ package usage
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"slices"
@@ -19,6 +20,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/guettli/konmon/internal/checks"
 )
 
 // PodMetrics is the resource of the metrics API.
@@ -70,20 +73,31 @@ func Batch(kind string) bool { return kind == "CronJob" || kind == "Job" }
 // Fetch lists the current PodMetrics and returns one sample per container,
 // attributed to the Pod's workload (pods resolves owners).
 func Fetch(ctx context.Context, dyn dynamic.Interface, namespace string, pods PodLookup) ([]Sample, error) {
+	list, err := List(ctx, dyn, namespace)
+	if err != nil {
+		return nil, err
+	}
+	return Samples(list, pods), nil
+}
+
+// List lists the current PodMetrics: the use of the containers of every
+// Pod. Containers with invalid numbers are left out.
+func List(ctx context.Context, dyn dynamic.Interface, namespace string) ([]checks.PodUsage, error) {
 	list, err := dyn.Resource(PodMetrics).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	var samples []Sample
+	result := make([]checks.PodUsage, 0, len(list.Items))
 	for i := range list.Items {
 		pm := &list.Items[i]
-		ns, name := pm.GetNamespace(), pm.GetName()
-		pod := pods(ns, name)
-		if pod == nil {
-			// Not known (yet): a per-Pod row would split the workload.
-			continue
+		pu := checks.PodUsage{
+			Namespace:  pm.GetNamespace(),
+			Pod:        pm.GetName(),
+			Containers: map[string]checks.ContainerUsage{},
 		}
-		kind, workload := Owner(pod, name)
+		if ts, _, _ := unstructured.NestedString(pm.Object, "timestamp"); ts != "" {
+			pu.Time, _ = time.Parse(time.RFC3339, ts)
+		}
 		containers, _, _ := unstructured.NestedSlice(pm.Object, "containers")
 		for _, c := range containers {
 			cm, ok := c.(map[string]any)
@@ -97,14 +111,34 @@ func Fetch(ctx context.Context, dyn dynamic.Interface, namespace string, pods Po
 			if cname == "" || errCPU != nil || errMem != nil {
 				continue
 			}
+			pu.Containers[cname] = checks.ContainerUsage{CPU: cpu.AsApproximateFloat64(), Memory: mem.Value()}
+		}
+		result = append(result, pu)
+	}
+	return result, nil
+}
+
+// Samples attributes the use of the containers to the Pods' workloads (pods
+// resolves owners). Pods which pods does not know are left out.
+func Samples(list []checks.PodUsage, pods PodLookup) []Sample {
+	var samples []Sample
+	for _, pu := range list {
+		pod := pods(pu.Namespace, pu.Pod)
+		if pod == nil {
+			// Not known (yet): a per-Pod row would split the workload.
+			continue
+		}
+		kind, workload := Owner(pod, pu.Pod)
+		for _, cname := range slices.Sorted(maps.Keys(pu.Containers)) {
+			cu := pu.Containers[cname]
 			samples = append(samples, Sample{
-				Key:    Key{Namespace: ns, Kind: kind, Workload: workload, Container: cname},
-				CPU:    cpu.AsApproximateFloat64(),
-				Memory: mem.Value(),
+				Key:    Key{Namespace: pu.Namespace, Kind: kind, Workload: workload, Container: cname},
+				CPU:    cu.CPU,
+				Memory: cu.Memory,
 			})
 		}
 	}
-	return samples, nil
+	return samples
 }
 
 func quantity(v any) (resource.Quantity, error) {

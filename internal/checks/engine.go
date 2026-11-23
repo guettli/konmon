@@ -210,6 +210,17 @@ func (e *Engine) UsesVolumeStats() bool {
 	return false
 }
 
+// UsesContainerUsage reports whether a check needs the use of containers
+// (Snapshot.SetContainerUsage).
+func (e *Engine) UsesContainerUsage() bool {
+	for _, d := range e.defs {
+		if d.uses("container-usage") {
+			return true
+		}
+	}
+	return false
+}
+
 // Failure is a check which threw (or returned invalid findings) for one
 // object. The previous findings of that check for that object should stay
 // as they are: the check did not say they are resolved.

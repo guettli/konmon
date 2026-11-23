@@ -74,6 +74,19 @@ type TestCase struct {
 		InodesFree     *uint64   `json:"inodesFree"`
 		Stale          bool      `json:"stale"`
 	} `json:"volumeStats"`
+	// ContainerUsage is what ctx.containerUsage returns for the object
+	// (a Pod): the use of its containers by name. Without it, the usage is
+	// not collected yet (ctx.containerUsage throws); use {} for "not
+	// measured". ContainerUsageIncomplete: the metrics API could not be
+	// read. ContainerUsageStale: the usage is out of date.
+	// ContainerUsageTime: the time of the measurement (default: now).
+	ContainerUsage map[string]struct {
+		CPUCores    float64 `json:"cpuCores"`
+		MemoryBytes int64   `json:"memoryBytes"`
+	} `json:"containerUsage"`
+	ContainerUsageIncomplete bool      `json:"containerUsageIncomplete"`
+	ContainerUsageStale      bool      `json:"containerUsageStale"`
+	ContainerUsageTime       time.Time `json:"containerUsageTime"`
 	// Expect lists the findings; only the given fields are compared.
 	Expect []map[string]any `json:"expect"`
 	// ExpectError is a substring of the error, if the check should fail.
@@ -219,6 +232,24 @@ func (e *Engine) runCase(def *Definition, tc *TestCase) error {
 	}
 	if tc.VolumeStats != nil {
 		snap.SetVolumeStats(volumes, !tc.VolumeStatsIncomplete)
+	}
+	if tc.ContainerUsage != nil {
+		usage := map[PodKey]PodUsage{}
+		if len(tc.ContainerUsage) > 0 {
+			t := tc.ContainerUsageTime
+			if t.IsZero() {
+				t = now
+			}
+			pu := PodUsage{
+				Namespace: item.Obj.GetNamespace(), Pod: item.Obj.GetName(), Time: t,
+				Containers: map[string]ContainerUsage{}, Stale: tc.ContainerUsageStale,
+			}
+			for name, c := range tc.ContainerUsage {
+				pu.Containers[name] = ContainerUsage{CPU: c.CPUCores, Memory: c.MemoryBytes}
+			}
+			usage[PodKey{Namespace: pu.Namespace, Pod: pu.Pod}] = pu
+		}
+		snap.SetContainerUsage(usage, !tc.ContainerUsageIncomplete)
 	}
 	rt.begin(snap, hist, now)
 	if !d.Matches(item.GVR.GroupResource()) {
