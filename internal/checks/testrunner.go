@@ -318,7 +318,7 @@ func findingFields(f *Finding) map[string]any {
 	}
 	return map[string]any{
 		"key": f.Key, "message": f.Message, "since": since, "condition": f.Condition,
-		"container": f.Container, "details": details,
+		"container": f.Container, "severity": f.Severity, "details": details,
 	}
 }
 

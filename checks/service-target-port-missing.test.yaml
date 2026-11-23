@@ -1,0 +1,71 @@
+check: service-target-port-missing
+cases:
+  - name: named port missing, numeric and matching ports are fine
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        selector: {app: web}
+        ports:
+          - {name: http, port: 80, targetPort: http}
+          - {name: metrics, port: 9090, targetPort: metrics}
+          - {name: dns, port: 53, protocol: UDP, targetPort: dns}
+          - {name: raw, port: 8081, targetPort: 8081}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: web-1, namespace: default, labels: {app: web}}
+          spec:
+            containers:
+              - name: app
+                ports: [{name: http, containerPort: 8080}, {name: dns, containerPort: 53}]
+      - resource: pods
+        object:
+          metadata: {name: web-2, namespace: default, labels: {app: web}}
+          spec:
+            containers: [{name: app}]
+            initContainers:
+              - {name: exporter, restartPolicy: Always, ports: [{name: metrics, containerPort: 9090}]}
+      - resource: pods
+        object:
+          metadata: {name: other, namespace: default, labels: {app: other}}
+          spec: {containers: [{name: app, ports: [{name: dns, containerPort: 53, protocol: UDP}]}]}
+    expect:
+      - {key: dns, message: "Service port dns (53) targets the port dns/UDP, which none of the 2 selected Pods has"}
+  - name: plain init containers do not count, unnamed port
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        selector: {app: web}
+        ports: [{port: 80, targetPort: http}]
+    related:
+      - resource: pods
+        object:
+          metadata: {name: web-1, namespace: default, labels: {app: web}}
+          spec:
+            containers: [{name: app}]
+            initContainers: [{name: init, ports: [{name: http, containerPort: 8080}]}]
+    expect:
+      - {key: "80", message: "Service port 80 targets the port http/TCP, which none of the 1 selected Pods has"}
+  - name: no running pods
+    resource: services
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        selector: {app: web}
+        ports: [{name: http, port: 80, targetPort: http}]
+    related:
+      - resource: pods
+        object:
+          metadata: {name: job, namespace: default, labels: {app: web}}
+          spec: {containers: [{name: app}]}
+          status: {phase: Succeeded}
+    expect: []
+  - name: service without selector
+    resource: services
+    available: [pods]
+    object:
+      metadata: {name: ext, namespace: default}
+      spec: {ports: [{name: http, port: 80, targetPort: http}]}
+    expect: []

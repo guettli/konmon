@@ -24,6 +24,8 @@ Health findings can alert; hygiene findings are only recorded and printed. Disab
 | [`pv-failed`](../checks/pv-failed.ts) | health | warning | on | PersistentVolumes in phase Failed: automatic reclamation failed |  | k8sgpt |
 | [`pvc-almost-full`](../checks/pvc-almost-full.ts) | health | warning | on | PersistentVolumeClaims whose volume is almost full: the used space or the used inodes reach a threshold (default 90%) | `percent=90` |  |
 | [`pvc-not-bound`](../checks/pvc-not-bound.ts) | health | warning | on | PersistentVolumeClaims which are Lost, or Pending for longer than a grace period | `pendingGraceSeconds=300` | k8sgpt |
+| [`secret-missing`](../checks/secret-missing.ts) | health | warning | on | Pods which reference a Secret which does not exist (and is not optional): a container which starts (again) cannot get it |  | Popeye |
+| [`service-target-port-missing`](../checks/service-target-port-missing.ts) | health | warning | on | Service ports whose named targetPort is not a port of any Pod the Service selects: the EndpointSlices list those Pods without that port, so traffic to it fails although the Pods are ready |  | Popeye |
 | [`service-without-endpoints`](../checks/service-without-endpoints.ts) | health | warning | on | Services whose Pods exist but none is ready: traffic to them fails |  | k8sgpt |
 | [`serviceaccount-missing`](../checks/serviceaccount-missing.ts) | health | warning | on | workloads whose Pods use a ServiceAccount which does not exist: the Pods cannot be created |  | Popeye |
 | [`webhook-service-unavailable`](../checks/webhook-service-unavailable.ts) | health | critical | on | admission webhooks whose Service does not exist or has no ready endpoints |  | k8sgpt |
@@ -39,7 +41,7 @@ Health findings can alert; hygiene findings are only recorded and printed. Disab
 | [`pod-unmanaged`](../checks/pod-unmanaged.ts) | hygiene | info | on | Pods which no controller manages: they are not recreated when they or their node die |  | Popeye |
 | [`pv-released`](../checks/pv-released.ts) | hygiene | info | on | PersistentVolumes which are Released (their claim was deleted, reclaim policy Retain) or Available (no claim): storage which is paid for and probably forgotten |  | k8sgpt, Popeye |
 | [`rbac-binding-dangling`](../checks/rbac-binding-dangling.ts) | hygiene | warning | on | RoleBindings and ClusterRoleBindings which reference a Role or ClusterRole that does not exist |  | Popeye |
-| [`selector-matches-no-pods`](../checks/selector-matches-no-pods.ts) | hygiene | warning | on | PodDisruptionBudgets and NetworkPolicies whose pod selector matches no Pod: usually a typo or a leftover |  | k8sgpt, Popeye |
+| [`selector-matches-no-pods`](../checks/selector-matches-no-pods.ts) | hygiene | warning | on | PodDisruptionBudgets and NetworkPolicies whose pod selector matches no Pod, and NetworkPolicy rules whose namespaceSelector matches no Namespace (the peer allows nothing): usually a typo or a leftover |  | k8sgpt, Popeye |
 | [`statefulset-references-missing`](../checks/statefulset-references-missing.ts) | hygiene | warning | on | StatefulSets whose governing Service or the StorageClass of a volumeClaimTemplate does not exist |  | k8sgpt |
 | [`storageclass-multiple-default`](../checks/storageclass-multiple-default.ts) | hygiene | warning | on | StorageClasses marked as default when there is more than one: which one a new claim gets is surprising |  | k8sgpt |
 | [`suspended`](../checks/suspended.ts) | hygiene | info | on | suspended CronJobs and Jobs, and cordoned Nodes: often a manual action which was not undone |  | k8sgpt, Popeye |
@@ -101,7 +103,7 @@ Use your checks with `--checks DIR` (repeatable). `--disable-check NAME` (globs)
 
 **Types:** `konmon checks types > konmon.d.ts` and a `tsconfig.json` like the one in [checks/](../checks/) give you completion and type errors in your editor.
 
-**Tests:** put `NAME.test.yaml` next to a check. Each case has an object, optionally related objects, history, volume stats (`volumeStats`, for the object unless `namespace`/`pvc` are given; without it they are not collected yet, `[]` means not mounted; `stale` and `volumeStatsIncomplete` for the cases above), params and the time, and the expected findings (only the fields given are compared). `konmon checks test --checks DIR` runs them without a cluster. The core checks in [checks/](../checks/) are examples.
+**Tests:** put `NAME.test.yaml` next to a check. Each case has an object, optionally related objects, history, volume stats (`volumeStats`, for the object unless `namespace`/`pvc` are given; without it they are not collected yet, `[]` means not mounted; `stale` and `volumeStatsIncomplete` for the cases above), params and the time, and the expected findings (only the fields given are compared; `severity` is the effective one). `konmon checks test --checks DIR` runs them without a cluster. The core checks in [checks/](../checks/) are examples.
 
 ```yaml
 check: pod-container-restarts
