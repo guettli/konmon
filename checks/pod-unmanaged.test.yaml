@@ -6,10 +6,29 @@ cases:
       metadata: {name: p, namespace: default}
       status: {phase: Running}
     expect:
-      - {message: Pod is not managed by a controller}
+      - {message: Pod is not managed by a controller, severity: warning}
+  - name: kubectl debug node
+    resource: pods
+    object:
+      metadata: {name: node-debugger-node1-abcde, namespace: default}
+      status: {phase: Running}
+    expect:
+      - {message: Pod is not managed by a controller, severity: warning}
+  - name: managed by a controller
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default, ownerReferences: [{kind: ReplicaSet, name: rs, controller: true}]}
+      status: {phase: Running}
+    expect: []
   - name: managed, mirror or finished
     resource: pods
     object:
       metadata: {name: p, namespace: kube-system, annotations: {kubernetes.io/config.mirror: abc}}
       status: {phase: Running}
+    expect: []
+  - name: finished
+    resource: pods
+    object:
+      metadata: {name: p, namespace: default}
+      status: {phase: Succeeded}
     expect: []
