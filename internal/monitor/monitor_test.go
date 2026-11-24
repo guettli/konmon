@@ -201,6 +201,74 @@ func TestApplySkipsExcludedNamespaces(t *testing.T) {
 	}
 }
 
+func TestExcludedNamespace(t *testing.T) {
+	m := &Monitor{cfg: Config{Namespaces: []string{"app-*", "db"}, ExcludeNamespaces: []string{"app-test"}}}
+	for _, tc := range []struct {
+		namespace string
+		want      bool
+	}{
+		{"", false}, // cluster-scoped
+		{"app-a", false},
+		{"db", false},
+		{"app-test", true}, // ExcludeNamespaces wins
+		{"kube-system", true},
+	} {
+		if got := m.excluded(tc.namespace); got != tc.want {
+			t.Errorf("excluded(%q) = %v, want %v", tc.namespace, got, tc.want)
+		}
+	}
+	all := &Monitor{}
+	if all.excluded("kube-system") {
+		t.Error("without Namespaces every namespace is looked into")
+	}
+}
+
+// Objects outside of --namespace are neither stored nor checked.
+func TestSkipsNamespacesWhichAreNotLookedInto(t *testing.T) {
+	src := &fakeSource{synced: true}
+	m, st := newTestMonitor(t, src, nil)
+	m.cfg.Namespaces = []string{"watched-*"}
+	ctx := context.Background()
+	other := job("j", "u1", true, "") // namespace "ns"
+	watched := job("w", "u2", true, "")
+	watched.SetNamespace("watched-a")
+	src.items = []watch.Item{{GVR: jobsGVR, Obj: other}, {GVR: jobsGVR, Obj: watched}}
+	batch := []any{watch.Upsert{GVR: jobsGVR, Obj: other}, watch.Upsert{GVR: jobsGVR, Obj: watched}}
+	if err := m.apply(ctx, batch, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Evaluate(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	objs, err := st.FindObjects(ctx, "jobs", "", "", "j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 0 {
+		t.Errorf("object outside of --namespace was stored: %+v", objs)
+	}
+	if objs, err = st.FindObjects(ctx, "jobs", "", "", "w"); err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 1 {
+		t.Errorf("object of --namespace was not stored: %+v", objs)
+	}
+	open, err := st.FindingsAt(ctx, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespaces := map[string]bool{}
+	for _, r := range open {
+		namespaces[r.Finding.Namespace] = true
+	}
+	if namespaces["ns"] {
+		t.Error("finding of an object outside of --namespace")
+	}
+	if !namespaces["watched-a"] {
+		t.Errorf("no finding of the object of --namespace: %+v", open)
+	}
+}
+
 func TestEvaluateFiresAfterForAndResolves(t *testing.T) {
 	src := &fakeSource{}
 	n := &recordingNotifier{}

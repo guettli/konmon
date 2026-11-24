@@ -42,6 +42,7 @@ import (
 var runOpts struct {
 	kube                 kubeFlags
 	clusterName          string
+	namespaces           []string
 	checks               checkFlags
 	historyWindow        time.Duration
 	revisions            bool
@@ -81,6 +82,10 @@ func init() {
 	f := runCmd.Flags()
 	runOpts.kube.register(f)
 	f.StringVar(&runOpts.clusterName, "cluster-name", "", "Value of the 'cluster' label of alerts. Empty: no label.")
+	f.StringSliceVarP(&runOpts.namespaces, "namespace", "n", nil,
+		"Namespaces to look into. Objects of other namespaces are not stored and not checked, so a check cannot read them either; "+
+			"cluster-scoped objects are always looked into. konmon still watches all namespaces: the permissions it needs do not change. "+
+			"Comma-separated, glob patterns allowed. Default: all namespaces.")
 	runOpts.checks.register(f)
 	f.DurationVar(&runOpts.historyWindow, "history-window", 24*time.Hour, "How much condition history checks which use ctx.history can see.")
 	f.BoolVar(&runOpts.revisions, "revisions", true, "Store a compressed copy of every changed object, not only the latest version.")
@@ -106,6 +111,16 @@ func init() {
 	f.IntVar(&runOpts.alertLogBytes, "alert-log-bytes", podlogs.DefaultMaxBytes, "Maximum size of the 'logs' annotation; longer logs are cut at the front.")
 
 	rootCmd.AddCommand(runCmd)
+}
+
+// runNamespaceExcluded reports whether the objects of a namespace are not
+// looked into: outside of --namespace, or matched by --exclude-namespace.
+// The monitor does the same for the objects of the watcher.
+func runNamespaceExcluded(namespace string) bool {
+	if len(runOpts.namespaces) > 0 && !matchGlob(namespace, runOpts.namespaces) {
+		return true
+	}
+	return matchGlob(namespace, runOpts.checks.excludeNamespaces)
 }
 
 func globMatcher(patterns []string) (func(schema.GroupResource) bool, error) {
@@ -252,6 +267,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("--no-revisions-for: %w", err)
 	}
+	if _, err := globMatcher(runOpts.namespaces); err != nil {
+		return fmt.Errorf("--namespace: %w", err)
+	}
 
 	config, dyn, disc, err := runOpts.kube.clients()
 	if err != nil {
@@ -350,6 +368,7 @@ func run(ctx context.Context) error {
 		Checks:            engine,
 		Ignore:            ignore.ignored,
 		Escalate:          ignore.escalated,
+		Namespaces:        runOpts.namespaces,
 		ExcludeNamespaces: runOpts.checks.excludeNamespaces,
 		StoreType:         storeType(engine),
 		HistoryWindow:     runOpts.historyWindow,
@@ -378,7 +397,7 @@ func run(ctx context.Context) error {
 	g.Go(func() error { return mon.Run(ctx, events) })
 	if runOpts.usageInterval > 0 {
 		lookup := func(namespace, name string) *unstructured.Unstructured {
-			if matchGlob(namespace, runOpts.checks.excludeNamespaces) {
+			if runNamespaceExcluded(namespace) {
 				return nil
 			}
 			obj, synced := watcher.Get(pods, namespace, name)

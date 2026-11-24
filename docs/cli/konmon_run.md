@@ -41,6 +41,7 @@ konmon run [flags]
       --ignore-finding-regex stringArray    Drop findings matching this regex (Go syntax). Matched against: 'check resource namespace/name message'. Can be given multiple times.
       --kubeconfig string                   Path of the kubeconfig file. Default: $KUBECONFIG or ~/.kube/config, or the in-cluster config.
       --listen string                       Address for /healthz (liveness), /readyz (readiness, startup) and /metrics. Empty disables it. (default ":8080")
+  -n, --namespace strings                   Namespaces to look into. Objects of other namespaces are not stored and not checked, so a check cannot read them either; cluster-scoped objects are always looked into. konmon still watches all namespaces: the permissions it needs do not change. Comma-separated, glob patterns allowed. Default: all namespaces.
       --no-revisions-for strings            Resource types (resource.group, globs allowed) to store without revisions.
       --resend-resolved duration            How long resolved alerts are re-sent to Alertmanager. (default 15m0s)
       --retention duration                  How long to keep history (revisions, condition changes, resolved findings, deleted objects). 0 keeps everything. (default 720h0m0s)

@@ -7,6 +7,9 @@ konmon run --db konmon.db
 # Send alerts, with a cluster label.
 konmon run --db konmon.db --cluster-name prod --alertmanager-url http://alertmanager:9093
 
+# Only some namespaces (comma-separated, glob patterns allowed).
+konmon run --db konmon.db -n my-app,'team-*'
+
 # Ad hoc, like check-conditions: list everything once and print findings,
 # health first, hygiene (never alerts) below.
 # Exit code 1: health findings (or hygiene findings of a named check);
@@ -42,6 +45,8 @@ konmon history --db konmon.db -n kube-system pods/coredns-6799fbcd5-abcde
 konmon history --db konmon.db machines.cluster.x-k8s.io/my-machine --since 24h
 ```
 
+`konmon run -n` looks only into these namespaces: objects outside of them are not stored and not checked, so a check cannot read them either (cluster-scoped objects are always looked into, and `--exclude-namespace` still applies). konmon watches all namespaces either way, so `-n` does not change the permissions it needs. `konmon check -n` works differently: it only filters the findings (see [below](#coming-from-check-conditions)).
+
 `findings` and `history` read the database while `konmon run` writes to it (SQLite WAL mode); they never create a database, so a wrong `--db` is an error, not an empty history. Use `sqlite3` for anything else. The JSON functions of SQLite work on the `object` column:
 
 ```sql
@@ -65,7 +70,7 @@ kustomizations.kustomize.toolkit.fluxcd.io flux-system/infra uid=10cb7e5c-… fi
 
 ## Suggesting resource requests
 
-`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it; then disable `container-memory-near-limit` too, which checks the latest sample). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment (or Argo Rollout), a CronJob's Jobs for the CronJob. Namespaces excluded with `--exclude-namespace` are not sampled.
+`konmon run` samples the CPU and memory use of every container from the metrics API (`metrics.k8s.io`, served by metrics-server; k3s ships it) once a minute (`--usage-interval`, 0 disables it; then disable `container-memory-near-limit` too, which checks the latest sample). It keeps one row per workload, container and hour: the number of samples, the CPU sum and maximum, and the memory maximum. Rows are pruned with `--retention`. Pods count for their workload: a ReplicaSet's for its Deployment (or Argo Rollout), a CronJob's Jobs for the CronJob. Namespaces konmon does not look into (`-n`, `--exclude-namespace`) are not sampled.
 
 `konmon suggest-requests` turns that into requests:
 
