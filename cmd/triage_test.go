@@ -215,6 +215,81 @@ func TestTriageRejectsPastUntil(t *testing.T) {
 	}
 }
 
+func TestTriageDefaultConfigFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	var out bytes.Buffer
+	editor, configs, err := openTriageConfig(&out, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if editor.Path() != defaultConfigFile || len(configs) != 1 || configs[0] != defaultConfigFile {
+		t.Fatalf("target %q, configs %v", editor.Path(), configs)
+	}
+	if !strings.Contains(out.String(), "Created .konmon.yaml") {
+		t.Errorf("the user is not told about the new file:\n%s", out.String())
+	}
+	data, err := os.ReadFile(defaultConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "# konmon config") {
+		t.Errorf("content of the new file:\n%s", data)
+	}
+	// It is read like any config file, and a second run does not report it
+	// again or lose its content.
+	if _, err := config.Load(configs); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.AddIgnore(&config.IgnoreRule{Check: "orphaned", Comment: "fine"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := editor.Save(); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if _, _, err := openTriageConfig(&out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "" {
+		t.Errorf("an existing file is reported as created:\n%s", out.String())
+	}
+	cfg, err := config.Load(configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ignore) != 1 {
+		t.Errorf("rules of the existing file: %+v", cfg.Ignore)
+	}
+}
+
+// The answers go to the last --config; a missing one is created, too.
+func TestTriageConfigTargetIsTheLastFile(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "shared.yaml")
+	if err := os.WriteFile(shared, []byte("ignore:\n  - check: orphaned\n    comment: fine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "prod.yaml")
+	var out bytes.Buffer
+	editor, configs, err := openTriageConfig(&out, []string{shared, target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if editor.Path() != target || len(configs) != 2 {
+		t.Fatalf("target %q, configs %v", editor.Path(), configs)
+	}
+	if !strings.Contains(out.String(), "Created "+target) {
+		t.Errorf("output:\n%s", out.String())
+	}
+	cfg, err := config.Load(configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Ignore) != 1 {
+		t.Errorf("rules of both files: %+v", cfg.Ignore)
+	}
+}
+
 func TestTriageBaseline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "konmon.yaml")
 	odd := conditionFinding("a", "w2", "Weird[*]", "False", "X")

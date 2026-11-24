@@ -64,8 +64,9 @@ konmon check --while StillProvisioning && music
 konmon check --while . --timeout 15m
 
 # False positives (e.g. conditions of CRDs konmon does not know): fix them
-# interactively; the answers go into a config file.
-konmon triage --context prod --config konmon.yaml
+# interactively; the answers go into a config file (.konmon.yaml without
+# --config, created if missing).
+konmon triage --context prod
 
 # Monitor: keep the history and send alerts.
 konmon run --db konmon.db --config konmon.yaml --alertmanager-url http://alertmanager:9093
