@@ -5,39 +5,23 @@
 // ReadOnlyMany only, or every Pod mounts them read-only) are skipped: a
 // read-only image is full by design. On a shared filesystem (local-path,
 // hostPath) the kubelet reports the whole filesystem of a local PV and
-// nothing for a hostPath PV. Such a volume is skipped: a local or hostPath
-// PV whose reported filesystem is more than twice the PV's capacity is a
-// directory on the node's filesystem, not a disk of its own, so its fill
-// level is the node's (watch that with node-exporter or similar), and every
-// PVC on that node would report the same. sharedFilesystems=true checks
-// them anyway.
+// nothing for a hostPath PV. Volumes of provisioners which make a directory
+// on the node's filesystem (local-path, OpenEBS LocalPV hostpath) are
+// skipped: their fill level is the node's (watch that with node-exporter or
+// similar), and every such PVC on the node would report the same.
+// sharedFilesystems=true checks them anyway. A local PV on a disk of its
+// own (hand-written, or the local-static-provisioner) is checked.
 import { defineCheck, type KubeObject } from "konmon";
 
-// The grammar of resource.Quantity: a number, then a binary suffix (group
-// 2), a decimal SI suffix (group 2) or a decimal exponent (group 3).
-const quantity = /^([+-]?(?:\d+\.?\d*|\.\d+))(?:(Ki|Mi|Gi|Ti|Pi|Ei|n|u|m|k|M|G|T|P|E)|([eE][+-]?\d+))?$/;
-const binary: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60 };
-const decimal: Record<string, number> = { n: -9, u: -6, m: -3, k: 3, M: 6, G: 9, T: 12, P: 15, E: 18 };
+// Provisioners whose volumes are directories on the node's filesystem.
+const sharedProvisioners = new Set(["rancher.io/local-path", "openebs.io/local"]);
 
-// A Kubernetes quantity in bytes; undefined if it is none.
-function parseQuantity(v: unknown): number | undefined {
-  if (typeof v === "number") return isFinite(v) ? v : undefined;
-  if (typeof v !== "string") return undefined;
-  const m = quantity.exec(v);
-  if (!m) return undefined;
-  if (m[3]) return Number(v);
-  const suffix = m[2];
-  if (!suffix) return Number(m[1]);
-  if (suffix in binary) return Number(m[1]) * binary[suffix];
-  return Number(`${m[1]}e${decimal[suffix]}`);
-}
-
-// sharedFilesystem: the claim's PV is a local or hostPath one, and the
-// filesystem the kubelet reports is more than twice its capacity.
-function sharedFilesystem(pv: KubeObject | null, reportedBytes: number | undefined): boolean {
-  if (!pv || reportedBytes === undefined || !(pv.spec?.local || pv.spec?.hostPath)) return false;
-  const capacity = parseQuantity(pv.spec?.capacity?.storage);
-  return capacity !== undefined && capacity > 0 && reportedBytes > 2 * capacity;
+function sharedFilesystem(pv: KubeObject | null): boolean {
+  return (
+    !!pv &&
+    !!(pv.spec?.local || pv.spec?.hostPath) &&
+    sharedProvisioners.has(pv.metadata.annotations?.["pv.kubernetes.io/provisioned-by"] ?? "")
+  );
 }
 
 function percent(used: number | undefined, free: number | undefined, total: number | undefined): number | undefined {
@@ -104,12 +88,11 @@ export default defineCheck({
     // Only now: it lists the Pods of the namespace.
     if (readOnly(pvc, ctx.list("pods", { namespace: pvc.metadata.namespace }))) return [];
     const volumeName = pvc.spec?.volumeName;
-    if (!ctx.params.sharedFilesystems && volumeName && ctx.has("persistentvolumes")) {
-      const pv = ctx.get("persistentvolumes", null, volumeName);
-      const reported =
-        st.capacityBytes ??
-        (st.usedBytes !== undefined && st.availableBytes !== undefined ? st.usedBytes + st.availableBytes : undefined);
-      if (sharedFilesystem(pv, reported)) return [];
+    // resources() lists types which are not synced yet, too: then ctx.get
+    // throws and the previous findings stay, instead of reporting a
+    // local-path PVC for a moment. Without access to PVs nothing is skipped.
+    if (!ctx.params.sharedFilesystems && volumeName && ctx.resources().includes("persistentvolumes")) {
+      if (sharedFilesystem(ctx.get("persistentvolumes", null, volumeName))) return [];
     }
     // Unknown numbers are left out, not reported as 0.
     const known = (o: Record<string, number | undefined>): Record<string, number> => {
