@@ -1,9 +1,12 @@
 package monitor
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -579,5 +582,67 @@ func TestEscalateRaisesSeverityOfLongFindings(t *testing.T) {
 	eval(11 * time.Minute)
 	if len(n.resolved) != 1 || n.resolved[0].Finding.Severity != "critical" {
 		t.Fatalf("resolved alert must keep the escalated severity, got %+v", n.resolved)
+	}
+}
+
+type failingNotifier struct{ err error }
+
+func (f *failingNotifier) Notify(context.Context, time.Time, []store.FindingRow, []store.FindingRow) error {
+	return f.err
+}
+
+func TestNotifyFailureIsLoggedOnce(t *testing.T) {
+	src := &fakeSource{}
+	n := &failingNotifier{err: errors.New("connection refused")}
+	m, st := newTestMonitor(t, src, n)
+	var logs bytes.Buffer
+	m.cfg.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	ctx := context.Background()
+
+	// Not synced yet: the alerts of the store are sent, and that fails.
+	var ne *notifyError
+	if err := m.Evaluate(ctx, t0); !errors.As(err, &ne) {
+		t.Fatalf("not synced: want a notify error, got %v", err)
+	}
+	src.synced = true
+	if err := m.Evaluate(ctx, t0); !errors.As(err, &ne) {
+		t.Fatalf("want a notify error, got %v", err)
+	}
+	if m.LastEvaluation().IsZero() {
+		t.Error("the evaluation worked, only notifying failed")
+	}
+	for i := range 3 {
+		m.evaluated(ctx, m.Evaluate(ctx, t0.Add(time.Duration(i+1)*30*time.Second)))
+	}
+	// Another error while notifying fails: no "again".
+	m.evaluated(ctx, errors.New("boom"))
+	n.err = nil
+	m.evaluated(ctx, m.Evaluate(ctx, t0.Add(2*time.Minute)))
+	m.evaluated(ctx, m.Evaluate(ctx, t0.Add(3*time.Minute)))
+	// Shutting down: a cancelled request is not logged as Alertmanager down.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	m.evaluated(cancelled, &notifyError{context.Canceled})
+
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if _, rest, ok := strings.Cut(l, " level="); ok && !strings.Contains(l, "first evaluation finished") {
+			lines = append(lines, "level="+rest)
+		}
+	}
+	want := []string{
+		`level=WARN msg="cannot send alerts to Alertmanager; every evaluation tries again" err="connection refused"`,
+		`level=ERROR msg="evaluation failed" err=boom`,
+		`level=INFO msg="sending alerts to Alertmanager again"`,
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got log lines\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+
+	// A store error while collecting the open alerts is no notify error.
+	src.synced = false
+	_ = st.Close()
+	if err := m.Evaluate(ctx, t0.Add(4*time.Minute)); err == nil || errors.As(err, &ne) {
+		t.Errorf("store error: want a plain error, got %v", err)
 	}
 }
