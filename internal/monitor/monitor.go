@@ -100,7 +100,10 @@ func (e *notifyError) Unwrap() error { return e.err }
 // evaluated logs the result of an evaluation of Run. An Alertmanager which
 // cannot be reached is logged when it starts and when it ends, not at every
 // evaluation: konmon sends all open alerts again each time anyway.
-func (m *Monitor) evaluated(err error) {
+func (m *Monitor) evaluated(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return // shutting down: a cancelled request says nothing about Alertmanager
+	}
 	var ne *notifyError
 	switch {
 	case errors.As(err, &ne):
@@ -186,7 +189,7 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if first && m.source.Synced() {
 				first = false
 				eval.Reset(m.cfg.EvalInterval)
-				m.evaluated(m.Evaluate(ctx, time.Now()))
+				m.evaluated(ctx, m.Evaluate(ctx, time.Now()))
 			}
 		case <-eval.C:
 			if err := doFlush(); err != nil {
@@ -195,7 +198,7 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if m.source.Synced() {
 				first = false
 			}
-			m.evaluated(m.Evaluate(ctx, time.Now()))
+			m.evaluated(ctx, m.Evaluate(ctx, time.Now()))
 		case <-prune.C:
 			m.prune(ctx, time.Now())
 		}
@@ -422,7 +425,12 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		nctx, ncancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		nerr := m.notifyOpen(nctx, now, 0)
 		ncancel()
-		if nerr != nil {
+		var ne *notifyError
+		switch {
+		case errors.As(nerr, &ne):
+			// Alertmanager is down: Run logs that once, not here every time.
+			m.cfg.Log.Debug("notify after aborted evaluation", "err", nerr)
+		case nerr != nil:
 			m.cfg.Log.Error("notify after aborted evaluation", "err", nerr)
 		}
 		return err
