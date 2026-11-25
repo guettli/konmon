@@ -1,0 +1,70 @@
+check: taint-not-tolerated
+cases:
+  - name: one taint tolerated, one not, system taints skipped, wildcards do not count
+    resource: nodes
+    object:
+      metadata: {name: n1}
+      spec:
+        taints:
+          - {key: dedicated, value: gpu, effect: NoSchedule}
+          - {key: maintenance, effect: NoExecute}
+          - {key: soft, effect: PreferNoSchedule}
+          - {key: node.kubernetes.io/unschedulable, effect: NoSchedule}
+          - {key: node-role.kubernetes.io/control-plane, effect: NoSchedule}
+          - {key: karpenter.sh/disrupted, effect: NoSchedule}
+          - {key: node.cilium.io/agent-not-ready, effect: NoExecute}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: train, namespace: ml}
+          spec: {tolerations: [{key: dedicated, operator: Equal, value: gpu, effect: NoSchedule}]}
+      - resource: pods
+        object:
+          metadata: {name: cni, namespace: kube-system}
+          spec: {tolerations: [{operator: Exists}]}
+      - resource: pods
+        object:
+          metadata: {name: node-exporter, namespace: monitoring}
+          spec: {tolerations: [{operator: Exists, effect: NoSchedule}, {operator: Exists, effect: NoExecute}]}
+      - resource: pods
+        object:
+          metadata: {name: wrong-value, namespace: x}
+          spec: {tolerations: [{key: maintenance, operator: Equal, value: "yes", effect: NoExecute, tolerationSeconds: 60}]}
+    expect:
+      - {key: "maintenance:NoExecute", message: "no Pod tolerates taint maintenance:NoExecute: only Pods which tolerate all taints can be scheduled there"}
+  - name: tolerated with Exists and without effect
+    resource: nodes
+    object:
+      metadata: {name: n1}
+      spec: {taints: [{key: dedicated, value: db, effect: NoSchedule}]}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: db, namespace: x}
+          spec: {tolerations: [{key: dedicated, operator: Exists}]}
+    expect: []
+  - name: default operator Equal, without values; Equal with an empty value
+    resource: nodes
+    object:
+      metadata: {name: n1}
+      spec: {taints: [{key: a, effect: NoSchedule}, {key: b, effect: NoSchedule}, {key: c, value: x, effect: NoSchedule}]}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: p, namespace: x}
+          spec: {tolerations: [{key: a}, {key: b, operator: Equal, value: ""}, {key: c}]}
+    expect:
+      - {key: "c=x:NoSchedule"}
+  - name: a toleration of another effect does not count, unknown operators do
+    resource: nodes
+    available: [pods]
+    object:
+      metadata: {name: n1}
+      spec: {taints: [{key: dedicated, value: db, effect: NoExecute}, {key: gen, value: "5", effect: NoSchedule}]}
+    related:
+      - resource: pods
+        object:
+          metadata: {name: db, namespace: x}
+          spec: {tolerations: [{key: dedicated, operator: Exists, effect: NoSchedule}, {key: gen, operator: Gt, value: "3"}]}
+    expect:
+      - {key: "dedicated=db:NoExecute"}
