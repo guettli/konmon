@@ -1,0 +1,40 @@
+check: workload-pdb-missing
+cases:
+  - name: several replicas without budget
+    resource: deployments.apps
+    available: [poddisruptionbudgets.policy]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {replicas: 3, template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+    related:
+      - resource: poddisruptionbudgets.policy
+        object: {metadata: {name: other, namespace: default}, spec: {selector: {matchLabels: {app: other}}}}
+      - resource: poddisruptionbudgets.policy
+        object: {metadata: {name: web, namespace: elsewhere}, spec: {selector: {matchLabels: {app: web}}}}
+    expect:
+      - {message: "3 replicas, but no PodDisruptionBudget: a node drain may evict all at once"}
+  - name: covered by a budget
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec: {replicas: 2, template: {metadata: {labels: {app: db, tier: data}}, spec: {containers: [{name: db}]}}}
+    related:
+      - resource: poddisruptionbudgets.policy
+        object: {metadata: {name: db, namespace: default}, spec: {selector: {matchExpressions: [{key: tier, operator: In, values: [data]}]}}}
+    expect: []
+  - name: an empty selector covers the whole namespace
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {replicas: 2, template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+    related:
+      - resource: poddisruptionbudgets.policy
+        object: {metadata: {name: all, namespace: default}, spec: {selector: {}}}
+    expect: []
+  - name: one replica, and the default of one
+    resource: deployments.apps
+    available: [poddisruptionbudgets.policy]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+    expect: []

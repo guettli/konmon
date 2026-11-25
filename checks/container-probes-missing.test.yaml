@@ -1,0 +1,39 @@
+check: container-probes-missing
+cases:
+  - name: service selects the pods, one container without readiness probe
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          metadata: {labels: {app: web}}
+          spec:
+            containers:
+              - {name: app, livenessProbe: {httpGet: {path: /, port: 80}}}
+              - {name: ok, readinessProbe: {httpGet: {path: /, port: 81}}}
+    related:
+      - {resource: services, object: {metadata: {name: web, namespace: default}, spec: {selector: {app: web}}}}
+      - {resource: services, object: {metadata: {name: web-metrics, namespace: default}, spec: {selector: {app: web}}}}
+      - {resource: services, object: {metadata: {name: other, namespace: default}, spec: {selector: {app: other}}}}
+      - {resource: services, object: {metadata: {name: web, namespace: elsewhere}, spec: {selector: {app: web}}}}
+    expect:
+      - {key: app, container: app, message: "container app has no readiness probe, but Service web, web-metrics sends traffic to it as soon as it started"}
+  - name: no service selects the pods
+    resource: deployments.apps
+    object:
+      metadata: {name: worker, namespace: default}
+      spec: {template: {metadata: {labels: {app: worker}}, spec: {containers: [{name: app}]}}}
+    related:
+      - {resource: services, object: {metadata: {name: ext, namespace: default}, spec: {type: ExternalName, externalName: x.example}}}
+      - {resource: services, object: {metadata: {name: manual, namespace: default}, spec: {}}}
+    expect: []
+  - name: statefulset
+    resource: statefulsets.apps
+    available: [services]
+    object:
+      metadata: {name: db, namespace: default}
+      spec: {template: {metadata: {labels: {app: db}}, spec: {containers: [{name: db}]}}}
+    related:
+      - {resource: services, object: {metadata: {name: db, namespace: default}, spec: {selector: {app: db}}}}
+    expect:
+      - {key: db}
