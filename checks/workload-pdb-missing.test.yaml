@@ -11,8 +11,10 @@ cases:
         object: {metadata: {name: other, namespace: default}, spec: {selector: {matchLabels: {app: other}}}}
       - resource: poddisruptionbudgets.policy
         object: {metadata: {name: web, namespace: elsewhere}, spec: {selector: {matchLabels: {app: web}}}}
+      - resource: poddisruptionbudgets.policy
+        object: {metadata: {name: no-selector, namespace: default}, spec: {minAvailable: 1}}
     expect:
-      - {message: "3 replicas, but no PodDisruptionBudget: a node drain may evict all at once"}
+      - {message: "3 replicas, but no PodDisruptionBudget: a node drain may evict them all at once (if they share a node, or several nodes are drained together)"}
   - name: covered by a budget
     resource: statefulsets.apps
     object:
@@ -31,10 +33,33 @@ cases:
       - resource: poddisruptionbudgets.policy
         object: {metadata: {name: all, namespace: default}, spec: {selector: {}}}
     expect: []
-  - name: one replica, and the default of one
+  - name: one replica, the default, and zero
     resource: deployments.apps
     available: [poddisruptionbudgets.policy]
     object:
       metadata: {name: web, namespace: default}
-      spec: {template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+      spec: {replicas: 0, template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
     expect: []
+  - name: an HPA with minReplicas 1 scaled up to 4
+    resource: deployments.apps
+    available: [poddisruptionbudgets.policy]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {replicas: 4, template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+    related:
+      - resource: horizontalpodautoscalers.autoscaling
+        object: {metadata: {name: web, namespace: default}, spec: {minReplicas: 1, maxReplicas: 10, scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: web}}}
+    expect: []
+  - name: an HPA with minReplicas 2 at 2, and one of another kind
+    resource: statefulsets.apps
+    available: [poddisruptionbudgets.policy]
+    object:
+      metadata: {name: web, namespace: default}
+      spec: {replicas: 1, template: {metadata: {labels: {app: web}}, spec: {containers: [{name: app}]}}}
+    related:
+      - resource: horizontalpodautoscalers.autoscaling
+        object: {metadata: {name: web, namespace: default}, spec: {minReplicas: 2, maxReplicas: 10, scaleTargetRef: {apiVersion: apps/v1, kind: StatefulSet, name: web}}}
+      - resource: horizontalpodautoscalers.autoscaling
+        object: {metadata: {name: web-d, namespace: default}, spec: {minReplicas: 1, maxReplicas: 10, scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: web}}}
+    expect:
+      - {message: "2 replicas, but no PodDisruptionBudget: a node drain may evict them all at once (if they share a node, or several nodes are drained together)"}

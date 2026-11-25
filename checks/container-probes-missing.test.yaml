@@ -1,6 +1,32 @@
 check: container-probes-missing
 cases:
-  - name: service selects the pods, one container without readiness probe
+  - name: the serving container has no readiness probe, a sidecar is not reported
+    resource: deployments.apps
+    object:
+      metadata: {name: web, namespace: default}
+      spec:
+        template:
+          metadata: {labels: {app: web}}
+          spec:
+            initContainers:
+              - {name: native-sidecar, restartPolicy: Always}
+            containers:
+              - name: app
+                ports: [{name: http, containerPort: 8080}]
+                livenessProbe: {httpGet: {path: /, port: 8080}}
+              - {name: log-shipper}
+    related:
+      - resource: services
+        object: {metadata: {name: web, namespace: default}, spec: {selector: {app: web}, ports: [{port: 80, targetPort: http}]}}
+      - resource: services
+        object: {metadata: {name: web-alt, namespace: default}, spec: {selector: {app: web}, ports: [{port: 81, targetPort: 8080}]}}
+      - resource: services
+        object: {metadata: {name: other, namespace: default}, spec: {selector: {app: other}, ports: [{port: 80}]}}
+      - resource: services
+        object: {metadata: {name: web, namespace: elsewhere}, spec: {selector: {app: web}, ports: [{port: 80}]}}
+    expect:
+      - {key: app, container: app, message: "container app has no readiness probe, but Services web, web-alt send traffic to it as soon as it starts"}
+  - name: the serving container has a probe, a sidecar without does not matter
     resource: deployments.apps
     object:
       metadata: {name: web, namespace: default}
@@ -9,31 +35,49 @@ cases:
           metadata: {labels: {app: web}}
           spec:
             containers:
-              - {name: app, livenessProbe: {httpGet: {path: /, port: 80}}}
-              - {name: ok, readinessProbe: {httpGet: {path: /, port: 81}}}
+              - {name: app, ports: [{containerPort: 8080}], readinessProbe: {httpGet: {path: /, port: 8080}}}
+              - {name: oauth2-proxy}
     related:
-      - {resource: services, object: {metadata: {name: web, namespace: default}, spec: {selector: {app: web}}}}
-      - {resource: services, object: {metadata: {name: web-metrics, namespace: default}, spec: {selector: {app: web}}}}
-      - {resource: services, object: {metadata: {name: other, namespace: default}, spec: {selector: {app: other}}}}
-      - {resource: services, object: {metadata: {name: web, namespace: elsewhere}, spec: {selector: {app: web}}}}
-    expect:
-      - {key: app, container: app, message: "container app has no readiness probe, but Service web, web-metrics sends traffic to it as soon as it started"}
-  - name: no service selects the pods
-    resource: deployments.apps
-    object:
-      metadata: {name: worker, namespace: default}
-      spec: {template: {metadata: {labels: {app: worker}}, spec: {containers: [{name: app}]}}}
-    related:
-      - {resource: services, object: {metadata: {name: ext, namespace: default}, spec: {type: ExternalName, externalName: x.example}}}
-      - {resource: services, object: {metadata: {name: manual, namespace: default}, spec: {}}}
+      - resource: services
+        object: {metadata: {name: web, namespace: default}, spec: {selector: {app: web}, ports: [{port: 80, targetPort: 8080}]}}
     expect: []
-  - name: statefulset
+  - name: undeclared port, no container has a probe
     resource: statefulsets.apps
-    available: [services]
     object:
       metadata: {name: db, namespace: default}
       spec: {template: {metadata: {labels: {app: db}}, spec: {containers: [{name: db}]}}}
     related:
-      - {resource: services, object: {metadata: {name: db, namespace: default}, spec: {selector: {app: db}}}}
+      - resource: services
+        object: {metadata: {name: db, namespace: default}, spec: {selector: {app: db}, ports: [{port: 5432}]}}
     expect:
-      - {key: db}
+      - {key: "", message: "no container has a readiness probe, but Service db sends traffic to the Pods as soon as they start"}
+  - name: undeclared port, but some container has a probe
+    resource: statefulsets.apps
+    object:
+      metadata: {name: db, namespace: default}
+      spec: {template: {metadata: {labels: {app: db}}, spec: {containers: [{name: db, readinessProbe: {exec: {command: [x]}}}, {name: exporter}]}}}
+    related:
+      - resource: services
+        object: {metadata: {name: db, namespace: default}, spec: {selector: {app: db}, ports: [{port: 5432}]}}
+    expect: []
+  - name: publishNotReadyAddresses, ExternalName, no selector or an empty one
+    resource: statefulsets.apps
+    object:
+      metadata: {name: etcd, namespace: default}
+      spec: {template: {metadata: {labels: {app: etcd}}, spec: {containers: [{name: etcd, ports: [{name: peer, containerPort: 2380}]}]}}}
+    related:
+      - resource: services
+        object: {metadata: {name: etcd-headless, namespace: default}, spec: {clusterIP: None, publishNotReadyAddresses: true, selector: {app: etcd}, ports: [{port: 2380, targetPort: peer}]}}
+      - {resource: services, object: {metadata: {name: ext, namespace: default}, spec: {type: ExternalName, externalName: x.example}}}
+      - {resource: services, object: {metadata: {name: manual, namespace: default}, spec: {}}}
+      - {resource: services, object: {metadata: {name: empty, namespace: default}, spec: {selector: {}}}}
+    expect: []
+  - name: protocol must match
+    resource: daemonsets.apps
+    object:
+      metadata: {name: dns, namespace: default}
+      spec: {template: {metadata: {labels: {app: dns}}, spec: {containers: [{name: dns, ports: [{name: dns, containerPort: 53, protocol: UDP}], readinessProbe: {exec: {command: [x]}}}, {name: tcp}]}}}
+    related:
+      - resource: services
+        object: {metadata: {name: dns, namespace: default}, spec: {selector: {app: dns}, ports: [{port: 53, protocol: UDP, targetPort: dns}]}}
+    expect: []
