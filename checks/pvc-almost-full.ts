@@ -5,8 +5,24 @@
 // ReadOnlyMany only, or every Pod mounts them read-only) are skipped: a
 // read-only image is full by design. On a shared filesystem (local-path,
 // hostPath) the kubelet reports the whole filesystem of a local PV and
-// nothing for a hostPath PV.
+// nothing for a hostPath PV. Volumes of provisioners which make a directory
+// on the node's filesystem (local-path, OpenEBS LocalPV hostpath) are
+// skipped: their fill level is the node's (watch that with node-exporter or
+// similar), and every such PVC on the node would report the same.
+// sharedFilesystems=true checks them anyway. A local PV on a disk of its
+// own (hand-written, or the local-static-provisioner) is checked.
 import { defineCheck, type KubeObject } from "konmon";
+
+// Provisioners whose volumes are directories on the node's filesystem.
+const sharedProvisioners = new Set(["rancher.io/local-path", "openebs.io/local"]);
+
+function sharedFilesystem(pv: KubeObject | null): boolean {
+  return (
+    !!pv &&
+    !!(pv.spec?.local || pv.spec?.hostPath) &&
+    sharedProvisioners.has(pv.metadata.annotations?.["pv.kubernetes.io/provisioned-by"] ?? "")
+  );
+}
 
 function percent(used: number | undefined, free: number | undefined, total: number | undefined): number | undefined {
   // Like df: used / (used + free), so blocks reserved for root count as
@@ -57,10 +73,11 @@ export default defineCheck({
   name: "pvc-almost-full",
   severity: "warning",
   match: { resources: ["persistentvolumeclaims"] },
-  // Pods are read to see whether the volume is mounted read-only.
-  reads: ["pods"],
+  // Pods are read to see whether the volume is mounted read-only, PVs to
+  // see whether it is a directory on a shared filesystem.
+  reads: ["pods", "persistentvolumes"],
   uses: ["volume-stats"],
-  params: { percent: 90 },
+  params: { percent: 90, sharedFilesystems: false },
   check(pvc, ctx) {
     const st = ctx.volumeStats(pvc);
     if (!st) return [];
@@ -70,6 +87,13 @@ export default defineCheck({
     if (!full(space) && !full(inodes)) return [];
     // Only now: it lists the Pods of the namespace.
     if (readOnly(pvc, ctx.list("pods", { namespace: pvc.metadata.namespace }))) return [];
+    const volumeName = pvc.spec?.volumeName;
+    // resources() lists types which are not synced yet, too: then ctx.get
+    // throws and the previous findings stay, instead of reporting a
+    // local-path PVC for a moment. Without access to PVs nothing is skipped.
+    if (!ctx.params.sharedFilesystems && volumeName && ctx.resources().includes("persistentvolumes")) {
+      if (sharedFilesystem(ctx.get("persistentvolumes", null, volumeName))) return [];
+    }
     // Unknown numbers are left out, not reported as 0.
     const known = (o: Record<string, number | undefined>): Record<string, number> => {
       const r: Record<string, number> = {};

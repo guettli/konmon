@@ -222,3 +222,97 @@ cases:
       - {usedBytes: 99, availableBytes: 1, capacityBytes: 100}
     expect:
       - {key: bytes}
+  - name: local-path volume on the node's filesystem is skipped, bytes and inodes
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-123, annotations: {pv.kubernetes.io/provisioned-by: rancher.io/local-path}}
+          spec: {capacity: {storage: 10Gi}, local: {path: /var/lib/rancher/k3s/storage/pvc-123_default_data}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000, capacityBytes: 2000000000000, inodes: 100, inodesUsed: 99, inodesFree: 1}
+    expect: []
+  - name: OpenEBS hostpath, a large claim on the node's filesystem
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-9}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-9, annotations: {pv.kubernetes.io/provisioned-by: openebs.io/local}}
+          spec: {capacity: {storage: 1Ti}, local: {path: /var/openebs/local/pvc-9}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000, capacityBytes: 2000000000000}
+    expect: []
+  - name: shared filesystems can be checked anyway
+    resource: persistentvolumeclaims
+    available: [pods]
+    params: {sharedFilesystems: true}
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-123, annotations: {pv.kubernetes.io/provisioned-by: rancher.io/local-path}}
+          spec: {capacity: {storage: 10Gi}, local: {path: /x}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000, capacityBytes: 2000000000000}
+    expect:
+      - {key: bytes}
+  - name: a hand-written local PV on a disk of its own is checked, even with a placeholder capacity
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pv-disk}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pv-disk}
+          spec: {capacity: {storage: 5Gi}, local: {path: /mnt/disks/nvme0}}
+    volumeStats:
+      - {usedBytes: 950000000000, availableBytes: 50000000000, capacityBytes: 1000000000000}
+    expect:
+      - {key: bytes}
+  - name: a CSI volume is checked
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pv-csi}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pv-csi, annotations: {pv.kubernetes.io/provisioned-by: rancher.io/local-path}}
+          spec: {capacity: {storage: 1Gi}, csi: {driver: x, volumeHandle: y}}
+    volumeStats:
+      - {usedBytes: 9500000000, availableBytes: 500000000, capacityBytes: 10000000000}
+    expect:
+      - {key: bytes}
+  - name: the PV does not exist, or the claim has no volume name
+    resource: persistentvolumeclaims
+    available: [pods, persistentvolumes]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: gone}
+    volumeStats:
+      - {usedBytes: 9500000000, availableBytes: 500000000, capacityBytes: 10000000000}
+    expect:
+      - {key: bytes}
+  - name: without access to PVs nothing is skipped
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    volumeStats:
+      - {usedBytes: 9500000000, availableBytes: 500000000, capacityBytes: 10000000000}
+    expect:
+      - {key: bytes}
