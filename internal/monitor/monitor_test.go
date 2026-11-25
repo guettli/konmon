@@ -1,9 +1,12 @@
 package monitor
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -579,5 +582,51 @@ func TestEscalateRaisesSeverityOfLongFindings(t *testing.T) {
 	eval(11 * time.Minute)
 	if len(n.resolved) != 1 || n.resolved[0].Finding.Severity != "critical" {
 		t.Fatalf("resolved alert must keep the escalated severity, got %+v", n.resolved)
+	}
+}
+
+type failingNotifier struct{ err error }
+
+func (f *failingNotifier) Notify(context.Context, time.Time, []store.FindingRow, []store.FindingRow) error {
+	return f.err
+}
+
+func TestNotifyFailureIsLoggedOnce(t *testing.T) {
+	src := &fakeSource{synced: true}
+	n := &failingNotifier{err: errors.New("connection refused")}
+	m, _ := newTestMonitor(t, src, n)
+	var logs bytes.Buffer
+	m.cfg.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	ctx := context.Background()
+
+	err := m.Evaluate(ctx, t0)
+	var ne *notifyError
+	if !errors.As(err, &ne) {
+		t.Fatalf("want a notify error, got %v", err)
+	}
+	if m.LastEvaluation().IsZero() {
+		t.Error("the evaluation worked, only notifying failed")
+	}
+	for i := range 3 {
+		m.evaluated(m.Evaluate(ctx, t0.Add(time.Duration(i)*30*time.Second)))
+	}
+	n.err = nil
+	m.evaluated(m.Evaluate(ctx, t0.Add(2*time.Minute)))
+	m.evaluated(m.Evaluate(ctx, t0.Add(3*time.Minute)))
+	m.evaluated(errors.New("boom"))
+
+	got := logs.String()
+	for _, want := range []string{
+		`level=WARN msg="cannot send alerts to Alertmanager; every evaluation tries again" err="connection refused"`,
+		`level=INFO msg="sending alerts to Alertmanager again"`,
+		`level=ERROR msg="evaluation failed" err=boom`,
+	} {
+		if strings.Count(got, want) != 1 {
+			t.Errorf("want %q once in\n%s", want, got)
+		}
+	}
+	// Plus "first evaluation finished".
+	if strings.Count(got, "\n") != 4 {
+		t.Errorf("want 4 log lines:\n%s", got)
 	}
 }

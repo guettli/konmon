@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -84,6 +85,35 @@ type Monitor struct {
 
 	lastEval    atomic.Int64  // unix ms of the last successful evaluation
 	evaluations atomic.Uint64 // successful evaluations
+	// notifyFailing: the last evaluation could not send its alerts (Run
+	// only).
+	notifyFailing bool
+}
+
+// notifyError is an error of sending alerts: the evaluation itself worked,
+// and the next one sends them again.
+type notifyError struct{ err error }
+
+func (e *notifyError) Error() string { return "notify: " + e.err.Error() }
+func (e *notifyError) Unwrap() error { return e.err }
+
+// evaluated logs the result of an evaluation of Run. An Alertmanager which
+// cannot be reached is logged when it starts and when it ends, not at every
+// evaluation: konmon sends all open alerts again each time anyway.
+func (m *Monitor) evaluated(err error) {
+	var ne *notifyError
+	switch {
+	case errors.As(err, &ne):
+		if !m.notifyFailing {
+			m.notifyFailing = true
+			m.cfg.Log.Warn("cannot send alerts to Alertmanager; every evaluation tries again", "err", ne.err)
+		}
+	case err != nil:
+		m.cfg.Log.Error("evaluation failed", "err", err)
+	case m.notifyFailing:
+		m.notifyFailing = false
+		m.cfg.Log.Info("sending alerts to Alertmanager again")
+	}
 }
 
 // New creates a Monitor. notifier may be nil.
@@ -156,9 +186,7 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if first && m.source.Synced() {
 				first = false
 				eval.Reset(m.cfg.EvalInterval)
-				if err := m.Evaluate(ctx, time.Now()); err != nil {
-					m.cfg.Log.Error("evaluation failed", "err", err)
-				}
+				m.evaluated(m.Evaluate(ctx, time.Now()))
 			}
 		case <-eval.C:
 			if err := doFlush(); err != nil {
@@ -167,9 +195,7 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 			if m.source.Synced() {
 				first = false
 			}
-			if err := m.Evaluate(ctx, time.Now()); err != nil {
-				m.cfg.Log.Error("evaluation failed", "err", err)
-			}
+			m.evaluated(m.Evaluate(ctx, time.Now()))
 		case <-prune.C:
 			m.prune(ctx, time.Now())
 		}
@@ -497,7 +523,7 @@ func (m *Monitor) Evaluate(ctx context.Context, now time.Time) error {
 		}
 	}
 	if err := m.notifier.Notify(ctx, now, firing, resolvedFired); err != nil {
-		return fmt.Errorf("notify: %w", err)
+		return &notifyError{err}
 	}
 	return nil
 }
@@ -545,7 +571,10 @@ func (m *Monitor) notifyOpen(ctx context.Context, now time.Time, maxAge time.Dur
 			firing = append(firing, r)
 		}
 	}
-	return m.notifier.Notify(ctx, now, firing, nil)
+	if err := m.notifier.Notify(ctx, now, firing, nil); err != nil {
+		return &notifyError{err}
+	}
+	return nil
 }
 
 // StoreHistory gives checks the condition history read from the store.
