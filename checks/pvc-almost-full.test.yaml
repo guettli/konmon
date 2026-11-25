@@ -222,3 +222,77 @@ cases:
       - {usedBytes: 99, availableBytes: 1, capacityBytes: 100}
     expect:
       - {key: bytes}
+  - name: local-path volume on the node's filesystem is skipped
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-123}
+          spec: {capacity: {storage: 10Gi}, local: {path: /var/lib/rancher/k3s/storage/pvc-123_default_data}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000, capacityBytes: 2000000000000}
+    expect: []
+  - name: shared filesystem without capacity, from used plus available
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-123}
+          spec: {capacity: {storage: 10Gi}, hostPath: {path: /data}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000}
+    expect: []
+  - name: shared filesystems can be checked anyway
+    resource: persistentvolumeclaims
+    available: [pods]
+    params: {sharedFilesystems: true}
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pvc-123}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pvc-123}
+          spec: {capacity: {storage: 10Gi}, local: {path: /x}}
+    volumeStats:
+      - {usedBytes: 1900000000000, availableBytes: 100000000000, capacityBytes: 2000000000000}
+    expect:
+      - {key: bytes}
+  - name: a local PV on a disk of its own is checked
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pv-disk}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pv-disk}
+          spec: {capacity: {storage: 100Gi}, local: {path: /mnt/disks/ssd1}}
+    volumeStats:
+      - {usedBytes: 101000000000, availableBytes: 5000000000, capacityBytes: 106000000000}
+    expect:
+      - {key: bytes}
+  - name: a CSI volume larger than requested is checked
+    resource: persistentvolumeclaims
+    available: [pods]
+    object:
+      metadata: {name: data, namespace: default}
+      spec: {volumeName: pv-csi}
+    related:
+      - resource: persistentvolumes
+        object:
+          metadata: {name: pv-csi}
+          spec: {capacity: {storage: 1Gi}, csi: {driver: x, volumeHandle: y}}
+    volumeStats:
+      - {usedBytes: 9500000000, availableBytes: 500000000, capacityBytes: 10000000000}
+    expect:
+      - {key: bytes}
