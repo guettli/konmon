@@ -124,6 +124,28 @@ func TestGlobMatcherIgnoresCase(t *testing.T) {
 	}
 }
 
+func TestRunNamespaceExcluded(t *testing.T) {
+	runOpts.namespaces = []string{"app-*"}
+	runOpts.checks.excludeNamespaces = []string{"app-test"}
+	t.Cleanup(func() { runOpts.namespaces, runOpts.checks.excludeNamespaces = nil, nil })
+	for _, tc := range []struct {
+		namespace string
+		want      bool
+	}{
+		{"app-a", false},
+		{"app-test", true}, // --exclude-namespace wins
+		{"kube-system", true},
+	} {
+		if got := runNamespaceExcluded(tc.namespace); got != tc.want {
+			t.Errorf("runNamespaceExcluded(%q) = %v, want %v", tc.namespace, got, tc.want)
+		}
+	}
+	runOpts.namespaces = nil
+	if runNamespaceExcluded("kube-system") {
+		t.Error("without --namespace every namespace is looked into")
+	}
+}
+
 func TestSplitResourceNameIgnoresCase(t *testing.T) {
 	resource, group, name, err := splitResourceName("Deployments.Apps/My-App")
 	if err != nil || resource != "deployments" || group != "apps" || name != "My-App" {

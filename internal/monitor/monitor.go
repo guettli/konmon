@@ -48,6 +48,9 @@ type Config struct {
 	// (config escalate rules), the after of the rule which raised it and
 	// the rule; rule "" leaves the severity. nil escalates none.
 	Escalate func(f *checks.Finding, openFor time.Duration, now time.Time) (severity string, after time.Duration, rule string)
+	// Namespaces are glob patterns of the namespaces to look into: objects
+	// of other namespaces are ignored completely. Empty: all namespaces.
+	Namespaces []string
 	// ExcludeNamespaces are glob patterns of namespaces to ignore completely.
 	ExcludeNamespaces []string
 	// StoreType decides which resource types are written to the database.
@@ -205,11 +208,22 @@ func (m *Monitor) Run(ctx context.Context, events <-chan any) error {
 	}
 }
 
+// excluded reports whether the objects of a namespace are not looked into:
+// outside of Namespaces, or matched by ExcludeNamespaces. Cluster-scoped
+// objects (namespace "") are always looked into.
 func (m *Monitor) excluded(namespace string) bool {
 	if namespace == "" {
 		return false
 	}
-	for _, p := range m.cfg.ExcludeNamespaces {
+	if len(m.cfg.Namespaces) > 0 && !matchGlob(namespace, m.cfg.Namespaces) {
+		return true
+	}
+	return matchGlob(namespace, m.cfg.ExcludeNamespaces)
+}
+
+// matchGlob reports whether the namespace matches one of the patterns.
+func matchGlob(namespace string, patterns []string) bool {
+	for _, p := range patterns {
 		if ok, err := path.Match(p, namespace); err == nil && ok {
 			return true
 		}

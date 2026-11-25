@@ -62,6 +62,7 @@ Triage on your machine, with the config you deployed, and put the result back in
 | `--retention` | `720h` | history to keep (revisions, condition changes, resolved findings, deleted objects, usage buckets); `0` keeps everything |
 | `--usage-interval` | `1m` | sampling of container CPU/memory from the metrics API for [`suggest-requests`](usage.md#suggesting-resource-requests) and `container-memory-near-limit`; `0` disables it (then also `--disable-check container-memory-near-limit`, or konmon does not start) |
 | `--revisions` / `--no-revisions-for` | `true` / none | keep a gzip copy of every change, per resource type |
+| `-n`, `--namespace` | all namespaces | the namespaces to look into; globs, everything outside is not stored and not checked |
 | `--exclude-namespace` | none | globs, not stored and not checked |
 | `--exclude-resource` | leases, endpointslices, events.k8s.io | `resource.group` globs; not checked or stored, but checks may read them |
 | `--checks` | none | directory with own checks, repeatable |
