@@ -30,6 +30,9 @@ var (
 	triageBaselineUntil string
 )
 
+// defaultConfigFile is the config file triage writes if there is no --config.
+const defaultConfigFile = ".konmon.yaml"
+
 var triageCmd = &cobra.Command{
 	Use:   "triage [CHECK...]",
 	Short: "Walk through the findings and write ignore rules and condition polarity to a config file",
@@ -37,7 +40,8 @@ var triageCmd = &cobra.Command{
 group: teach konmon the polarity of a condition, ignore findings like it (with
 a scope you choose, a comment and an optional expiry), snooze them, or keep
 them as a real problem. The answers are written to the config file (the last
---config, created if missing) after each decision, keeping its comments.
+--config, or .konmon.yaml without it) after each decision, keeping its
+comments. A missing file is created.
 The cluster is never changed: review the file and deploy it like any config.
 
 An ignore rule which hides only part of a group (only one object) leaves the
@@ -54,6 +58,7 @@ quiet now and only new problems are reported. Running it again adds only new
 findings. Failing checks and acknowledged findings are never baselined.
 
 Examples:
+  konmon triage --context prod
   konmon triage --context prod --config konmon.yaml
   konmon triage --config shared.yaml --config prod.yaml -n 'team-*'
   konmon triage --from-db --db /data/konmon.db --config konmon.yaml
@@ -68,6 +73,7 @@ Examples:
 func init() {
 	triageOpts.register(triageCmd.Flags())
 	_ = triageCmd.Flags().MarkHidden("output") // interactive: text only
+	triageCmd.Flags().Lookup("config").Usage += " Default: " + defaultConfigFile + " in the current directory, created if missing."
 	triageCmd.Flags().BoolVar(&triageFromDB, "from-db", false, "Take the open findings from the database of 'konmon run' (--db) instead of listing the cluster.")
 	triageCmd.Flags().BoolVar(&triageBaseline, "baseline", false,
 		"Do not ask: write one narrow ignore rule per open finding, so only new problems are reported. Like the baseline of a linter.")
@@ -80,10 +86,6 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 	if triageOpts.filter.output != "" && triageOpts.filter.output != "text" {
 		return errors.New("triage is interactive: --output is not supported")
 	}
-	configs := triageOpts.checks.configs
-	if len(configs) == 0 {
-		return errors.New("--config FILE is required: the answers are written to it (it is created if missing)")
-	}
 	if !triageBaseline && cmd.Flags().Changed("baseline-until") {
 		return errors.New("--baseline-until needs --baseline")
 	}
@@ -94,15 +96,11 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 		}
 		triageBaselineUntil = date
 	}
-	target := configs[len(configs)-1]
-	editor, err := config.OpenEditor(target)
+	editor, configs, err := openTriageConfig(cmd.OutOrStdout(), triageOpts.checks.configs)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
-		// Created on the first answer; until then it has no rules.
-		triageOpts.checks.configs = configs[:len(configs)-1]
-	}
+	triageOpts.checks.configs = configs
 	base, err := triageOpts.checks.config()
 	if err != nil {
 		return err
@@ -208,6 +206,29 @@ func triage(ctx context.Context, cmd *cobra.Command, only []string) error {
 		return t.baseline(triageBaselineUntil)
 	}
 	return t.run()
+}
+
+// openTriageConfig opens the config file the answers are written to: the
+// last --config, or .konmon.yaml if there is none. A missing file is created
+// right away (with its header comment only), so the user knows where the
+// answers go even if nothing is answered. It returns the config files to
+// read, which now all exist.
+func openTriageConfig(out io.Writer, configs []string) (*config.Editor, []string, error) {
+	if len(configs) == 0 {
+		configs = []string{defaultConfigFile}
+	}
+	target := configs[len(configs)-1]
+	editor, err := config.OpenEditor(target)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
+		if err := editor.Save(); err != nil {
+			return nil, nil, err
+		}
+		_, _ = fmt.Fprintf(out, "Created %s: the answers are written to it.\n", editor.Path())
+	}
+	return editor, configs, nil
 }
 
 // triageGroup are findings of one pattern: check, resource type, condition,

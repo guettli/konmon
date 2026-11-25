@@ -51,10 +51,11 @@ The time counts from when konmon first saw the finding, not from when it fired. 
 
 ## Interactive: `konmon triage`
 
-You don't have to write the file by hand. `konmon triage` walks through the open findings, grouped by pattern ("Stalled=True Waiting on 12 widgets"), and writes your answers to the config file (the last `--config`, created if missing, comments kept), after each decision:
+You don't have to write the file by hand. `konmon triage` walks through the open findings, grouped by pattern ("Stalled=True Waiting on 12 widgets"), and writes your answers to the config file (the last `--config`, or `.konmon.yaml` without it; a missing file is created and triage says so, comments are kept), after each decision:
 
 ```console
-$ konmon triage --context prod --config konmon.yaml
+$ konmon triage --context prod
+Created .konmon.yaml: the answers are written to it.
 [1/7] conditions  widgets.example.com  Stalled=True Waiting   (health, warning)
       12 findings in 4 namespaces, the oldest for 9d
       history: possibly normal for this type: Stalled=True on all 12 objects of widgets.example.com for at least 9d, all of them Ready=True. Suggestion: if that is right for this type, teach the polarity (t).

@@ -8,7 +8,8 @@ Walk through the open findings, grouped by pattern, and decide for each
 group: teach konmon the polarity of a condition, ignore findings like it (with
 a scope you choose, a comment and an optional expiry), snooze them, or keep
 them as a real problem. The answers are written to the config file (the last
---config, created if missing) after each decision, keeping its comments.
+--config, or .konmon.yaml without it) after each decision, keeping its
+comments. A missing file is created.
 The cluster is never changed: review the file and deploy it like any config.
 
 An ignore rule which hides only part of a group (only one object) leaves the
@@ -25,6 +26,7 @@ quiet now and only new problems are reported. Running it again adds only new
 findings. Failing checks and acknowledged findings are never baselined.
 
 Examples:
+  konmon triage --context prod
   konmon triage --context prod --config konmon.yaml
   konmon triage --config shared.yaml --config prod.yaml -n 'team-*'
   konmon triage --from-db --db /data/konmon.db --config konmon.yaml
@@ -44,7 +46,7 @@ konmon triage [CHECK...] [flags]
       --check-param stringArray            Override a check parameter: check.param=value, e.g. pod-container-restarts.restarts=10. Can be given multiple times.
       --check-timeout duration             Time limit for one call of a check function. (default 1s)
       --checks stringArray                 Directory with own checks (*.ts, *.js). A check with the name of a core check replaces it. Can be given multiple times.
-      --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged.
+      --config stringArray                 Config file with ignore rules and condition polarity (YAML, see docs/config.md). Can be given multiple times: the rules are merged. Default: .konmon.yaml in the current directory, created if missing.
       --context string                     Kubeconfig context to use. Default: current context.
       --disable-check strings              Checks to disable, by name. Comma-separated, glob patterns allowed. Wins over --enable-check.
       --enable-check strings               Checks to enable which are off by default, by name. Comma-separated, glob patterns allowed. 'konmon checks list --all' shows them.
