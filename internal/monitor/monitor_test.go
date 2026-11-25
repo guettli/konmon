@@ -626,8 +626,8 @@ func TestNotifyFailureIsLoggedOnce(t *testing.T) {
 
 	var lines []string
 	for _, l := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
-		if !strings.Contains(l, "first evaluation finished") {
-			lines = append(lines, l[strings.Index(l, "level="):])
+		if _, rest, ok := strings.Cut(l, " level="); ok && !strings.Contains(l, "first evaluation finished") {
+			lines = append(lines, "level="+rest)
 		}
 	}
 	want := []string{
